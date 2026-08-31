@@ -1,9 +1,121 @@
-<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0f766e"><title>総和 工事進捗管理</title><style>
-:root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#667085;--line:#e5e7eb;--accent:#0f766e;--accent2:#e6f4f1;--blue:#2563eb;--amber:#d97706;--green:#15803d}*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic","Hiragino Kaku Gothic ProN",sans-serif;background:var(--bg);color:var(--text)}button,input,select,textarea{font:inherit}.app{max-width:920px;margin:auto;padding:16px 14px 90px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.brand{font-weight:800}.sub{font-size:12px;color:var(--muted);margin-top:2px}.tabs{display:flex;gap:6px;flex-wrap:wrap}.tab{border:1px solid var(--line);background:white;border-radius:10px;min-height:42px;padding:0 12px;font-weight:700;font-size:13px}.tab.active{background:var(--accent2);border-color:var(--accent);color:#075e57}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat,.card{background:var(--card);border:1px solid var(--line);border-radius:14px}.stat{padding:12px}.stat .k{font-size:11px;color:var(--muted)}.stat .v{font-size:26px;font-weight:800;margin-top:2px}.section{margin-top:14px}.cardTitle{font-weight:800;padding:13px 14px;border-bottom:1px solid var(--line)}.row{width:100%;border:0;border-bottom:1px solid var(--line);background:white;text-align:left;padding:13px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:62px}.row:last-child{border-bottom:0}.rowMain{font-weight:700}.rowSub{font-size:12px;color:var(--muted);margin-top:3px}.pill{font-size:11px;font-weight:800;border-radius:999px;padding:5px 8px;white-space:nowrap}.p-blue{background:#e8f0ff;color:#2456c6}.p-amber{background:#fff2d9;color:#a35b00}.p-green{background:#e6f6ea;color:#1d7b38}.p-gray{background:#f0f2f5;color:#596273}.searchWrap{display:grid;grid-template-columns:1fr 150px;gap:8px}.input,.select,.textarea{width:100%;border:1px solid var(--line);border-radius:10px;background:white;min-height:44px;padding:9px 11px;font-size:16px}.caseBtn{width:100%;background:white;border:1px solid var(--line);border-radius:13px;padding:12px;text-align:left;margin-top:8px}.caseHead{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.detail{padding:14px}.detailTitle{font-size:20px;font-weight:800}.muted{color:var(--muted);font-size:13px}.progress{display:flex;overflow:auto;gap:4px;margin:18px 0 10px;padding-bottom:6px}.step{min-width:72px;text-align:center;font-size:10px}.dot{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);margin:auto;display:grid;place-items:center;font-weight:800;background:white}.step.on .dot{background:var(--accent2);border-color:var(--accent);color:#075e57}.kv{display:grid;grid-template-columns:1fr 1fr;gap:12px}.kv>div{padding:10px;background:#fafafa;border-radius:10px}.lab{font-size:11px;color:var(--muted)}.val{font-weight:700;margin-top:3px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.btn{min-height:44px;border-radius:10px;border:1px solid var(--line);padding:0 14px;background:white;font-weight:800}.btn.primary{background:var(--accent);border-color:var(--accent);color:white}.back{margin-bottom:10px}.form{padding:14px}.form label{display:block;font-size:13px;font-weight:700;margin-top:10px}.form label span{display:block;margin-bottom:5px}.twocol{display:grid;grid-template-columns:1fr 1fr;gap:8px}.notice{display:none;background:#fff;border:1px solid var(--line);border-left:4px solid var(--accent);padding:10px 12px;border-radius:10px;margin-bottom:10px}.hidden{display:none!important}.qr{width:150px;height:150px;margin:15px auto;background:repeating-linear-gradient(45deg,#000 0 8px,#fff 8px 16px);border:12px solid white;box-shadow:0 0 0 1px var(--line)}.footerNote{text-align:center;color:var(--muted);font-size:12px;margin-top:18px}@media(max-width:640px){.top{display:block}.tabs{margin-top:10px}.grid3{grid-template-columns:repeat(3,1fr)}.stat{padding:10px}.stat .v{font-size:22px}.searchWrap,.kv,.twocol{grid-template-columns:1fr}.app{padding:12px 10px 80px}}
-</style></head><body><main class="app"><div class="top"><div><div class="brand">総和 工事進捗管理</div><div class="sub">お客様操作用・簡易デモ</div></div><div class="tabs"><button class="tab active" data-v="home">今日の予定</button><button class="tab" data-v="cases">案件一覧</button><button class="tab" data-v="resident">入居者入力</button></div></div><div id="notice" class="notice"></div>
-<section id="home"><div class="grid3"><div class="stat"><div class="k">進行中案件</div><div class="v">6</div></div><div class="stat"><div class="k">本日現調</div><div class="v" style="color:var(--blue)">2</div></div><div class="stat"><div class="k">本日工事</div><div class="v" style="color:var(--green)">1</div></div></div><div class="section card"><div class="cardTitle">本日の現調</div><button class="row jump" data-id="c1"><span><div class="rowMain">9:00　○○マンション 101号室</div><div class="rowSub">担当：佐藤</div></span><b>›</b></button><button class="row jump" data-id="c2"><span><div class="rowMain">13:00　△△ハイツ 202号室</div><div class="rowSub">担当：鈴木</div></span><b>›</b></button></div><div class="section card"><div class="cardTitle">本日の工事</div><button class="row jump" data-id="c3"><span><div class="rowMain">9:00　□□コーポ 301号室</div><div class="rowSub">担当：山田班</div></span><b>›</b></button></div><div class="section card"><div class="cardTitle">日程未確定</div><button class="row jump" data-id="c4"><span><div class="rowMain">○○マンション 102号室</div><div class="rowSub">入居者回答待ち</div></span><b>›</b></button><button class="row jump" data-id="c5"><span><div class="rowMain">◇◇ハイツ 105号室</div><div class="rowSub">施工担当未定</div></span><b>›</b></button></div></section>
-<section id="cases" class="hidden"><div class="searchWrap"><input id="q" class="input" placeholder="物件名・部屋・担当者で検索"><select id="filter" class="select"><option value="all">すべて</option><option>現調調整中</option><option>材料手配中</option><option>施工予定</option><option>見積中</option><option>完了</option></select></div><div id="caseList"></div></section>
-<section id="detail" class="hidden"><button id="back" class="btn back">← 案件一覧へ</button><div id="detailCard" class="card detail"></div></section>
-<section id="resident" class="hidden"><div class="card form"><div style="font-size:18px;font-weight:800">現地調査 希望日時のご入力</div><div class="muted">案内文のQRコードからアクセスする入居者向け画面です。</div><div class="qr" aria-label="QRコードイメージ"></div><form id="residentForm"><label><span>物件名</span><input class="input" name="property" value="○○マンション" required></label><div class="twocol"><label><span>部屋番号</span><input class="input" name="room" placeholder="101号室" required></label><label><span>お名前</span><input class="input" name="name" placeholder="山田 太郎" required></label></div><label><span>電話番号</span><input class="input" name="phone" placeholder="090-1234-5678" required></label><div class="twocol"><label><span>第1希望</span><input class="input" name="d1" type="date" value="2026-09-03" required></label><label><span>時間帯</span><select class="select" name="t1"><option>9:00〜12:00</option><option>13:00〜15:00</option><option>15:00〜17:00</option></select></label></div><div class="twocol"><label><span>第2希望</span><input class="input" name="d2" type="date" value="2026-09-04"></label><label><span>時間帯</span><select class="select" name="t2"><option>13:00〜15:00</option><option>9:00〜12:00</option></select></label></div><label><span>その他連絡事項</span><textarea class="textarea" rows="3" name="note" placeholder="訪問時の注意事項など"></textarea></label><button class="btn primary" style="width:100%;margin-top:14px" type="submit">希望日時を送信する</button></form></div></section><div class="footerNote">※このデモは説明用です。入力内容はページを閉じるとリセットされます。</div></main><script>
-const data=[{id:'c1',p:'○○マンション',r:'101号室',s:'現調調整中',n:'現調実施',a:'東京都○○区○○町1-2-3',o:'○○管理株式会社',ss:'佐藤',sd:'2026/8/31 9:00',ws:'未定',wd:'未定',m:'未手配',note:'入居者と時間確認済み'},{id:'c2',p:'△△ハイツ',r:'202号室',s:'現調調整中',n:'現調実施',a:'東京都△△区△△町3-4-5',o:'△△不動産',ss:'鈴木',sd:'2026/8/31 13:00',ws:'未定',wd:'未定',m:'未手配',note:'オーナー立会なし'},{id:'c3',p:'□□コーポ',r:'301号室',s:'施工予定',n:'施工実施',a:'埼玉県□□市□□1-1-1',o:'□□管理',ss:'佐藤',sd:'2026/8/26 10:00',ws:'山田班',wd:'2026/8/31 9:00',m:'納品済',note:'駐車場1台利用可'},{id:'c4',p:'○○マンション',r:'102号室',s:'現調調整中',n:'入居者回答待ち',a:'東京都○○区○○町1-2-3',o:'○○管理株式会社',ss:'佐藤',sd:'未定',ws:'未定',wd:'未定',m:'未手配',note:'QR案内配布済'},{id:'c5',p:'◇◇ハイツ',r:'105号室',s:'材料手配中',n:'施工担当設定',a:'千葉県◇◇市◇◇2-2-2',o:'◇◇プロパティ',ss:'鈴木',sd:'2026/8/28 14:00',ws:'未定',wd:'2026/9/5 9:00',m:'2026/9/3納品予定',note:'職人手配待ち'},{id:'c6',p:'△○マンション',r:'203号室',s:'見積中',n:'見積提出',a:'東京都△○区1-5-2',o:'△○管理',ss:'佐藤',sd:'2026/8/27 11:00',ws:'未定',wd:'未定',m:'未手配',note:'見積作成中'}];let cur='c1';const ids=['home','cases','detail','resident'];function badge(s){let c=s==='現調調整中'?'p-blue':s==='材料手配中'?'p-amber':s==='施工予定'||s==='完了'?'p-green':'p-gray';return `<span class="pill ${c}">${s}</span>`}function show(v){ids.forEach(x=>document.getElementById(x).classList.toggle('hidden',x!==v));document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.v===v||(v==='detail'&&b.dataset.v==='cases')))}function list(){let q=document.getElementById('q').value.toLowerCase(),f=document.getElementById('filter').value;let x=data.filter(c=>(f==='all'||c.s===f)&&(`${c.p} ${c.r} ${c.ss} ${c.ws}`).toLowerCase().includes(q)));document.getElementById('caseList').innerHTML=x.map(c=>`<button class="caseBtn open" data-id="${c.id}"><div class="caseHead"><div><b>${c.p} ${c.r}</b><div class="rowSub">次：${c.n} ／ 現調：${c.ss} ／ 工事：${c.ws}</div></div>${badge(c.s)}</div></button>`).join('')||'<div class="muted" style="padding:20px">該当案件はありません。</div>';document.querySelectorAll('.open').forEach(b=>b.onclick=()=>openDetail(b.dataset.id))}function openDetail(id){cur=id;let c=data.find(x=>x.id===id),steps=['問い合わせ','現調','見積','受注','材料手配','材料納品','施工','写真'],pos={'現調調整中':1,'見積中':2,'材料手配中':4,'施工予定':6,'完了':7}[c.s]??0;document.getElementById('detailCard').innerHTML=`<div class="caseHead"><div><div class="detailTitle">${c.p} ${c.r}</div><div class="muted">${c.a}</div></div>${badge(c.s)}</div><div class="progress">${steps.map((s,i)=>`<div class="step ${i<=pos?'on':''}"><div class="dot">${i+1}</div><div>${s}</div></div>`).join('')}</div><div class="kv"><div><div class="lab">管理会社</div><div class="val">${c.o}</div></div><div><div class="lab">次のアクション</div><div class="val">${c.n}</div></div><div><div class="lab">現調</div><div class="val">${c.sd} ／ ${c.ss}</div></div><div><div class="lab">施工</div><div class="val">${c.wd} ／ ${c.ws}</div></div><div><div class="lab">材料</div><div class="val">${c.m}</div></div><div><div class="lab">備考</div><div class="val">${c.note}</div></div></div><div class="actions"><button id="advance" class="btn primary">次の工程へ進める</button><button id="assign" class="btn">工事担当を山田班に設定</button></div>`;document.getElementById('advance').onclick=()=>{let o=['現調調整中','見積中','材料手配中','施工予定','完了'],i=o.indexOf(c.s);if(i<o.length-1){c.s=o[i+1];c.n={'見積中':'見積提出','材料手配中':'材料発注','施工予定':'施工実施','完了':'完了報告'}[c.s]||c.n;msg(`${c.p} ${c.r} を「${c.s}」に更新しました`);openDetail(c.id);list()}else msg('この案件は完了しています')};document.getElementById('assign').onclick=()=>{c.ws='山田班';if(c.n==='施工担当設定')c.n='施工日確認';msg('工事担当を山田班に設定しました');openDetail(c.id);list()};show('detail')}function msg(t){let n=document.getElementById('notice');n.textContent=t;n.style.display='block';setTimeout(()=>n.style.display='none',3000)}document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{show(b.dataset.v);if(b.dataset.v==='cases')list()});document.querySelectorAll('.jump').forEach(b=>b.onclick=()=>openDetail(b.dataset.id));document.getElementById('back').onclick=()=>{list();show('cases')};document.getElementById('q').oninput=list;document.getElementById('filter').onchange=list;document.getElementById('residentForm').onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),room=(f.get('room')||'').trim(),name=(f.get('name')||'').trim();if(!room||!name)return msg('部屋番号とお名前を入力してください');let c=data.find(x=>x.p===f.get('property')&&x.r===room);if(c){c.sd=`${f.get('d1')} ${f.get('t1')}`;c.note=`入居者回答済（${name}様）`;c.n='現調日程確認'}msg(`希望日時を受け付けました：${room} ${name}様`);e.target.reset();list()};list();
-</script></body></html>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>総和 工事進捗管理</title>
+<style>
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",sans-serif;background:#f6f8fb;color:#172033}.app{max-width:900px;margin:auto;padding:14px 12px 70px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center}.brand{font-weight:800}.sub{font-size:12px;color:#667085}.tabs{display:flex;gap:6px;flex-wrap:wrap}.tab,.btn{min-height:44px;border:1px solid #e5e7eb;background:#fff;border-radius:10px;padding:0 13px;font-weight:700}.tab.active,.btn.primary{background:#0f766e;color:#fff;border-color:#0f766e}.hidden{display:none}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;margin-top:12px;overflow:hidden}.stat{padding:12px}.k{font-size:11px;color:#667085}.v{font-size:25px;font-weight:800}.title{padding:12px 14px;font-weight:800;border-bottom:1px solid #e5e7eb}.row{width:100%;padding:13px 14px;border:0;border-bottom:1px solid #e5e7eb;background:#fff;text-align:left;display:flex;justify-content:space-between;gap:8px;min-height:60px}.row:last-child{border-bottom:0}.main{font-weight:700}.muted{font-size:12px;color:#667085;margin-top:3px}.search{display:grid;grid-template-columns:1fr 150px;gap:8px;margin-top:12px}.input,.select,.textarea{width:100%;box-sizing:border-box;min-height:44px;border:1px solid #e5e7eb;border-radius:10px;padding:9px 11px;background:#fff;font-size:16px}.case{width:100%;margin-top:8px;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;text-align:left}.badge{font-size:11px;font-weight:800;padding:5px 8px;border-radius:999px;background:#eef2f6}.caseHead{display:flex;justify-content:space-between;gap:8px}.detail{padding:14px}.kv{display:grid;grid-template-columns:1fr 1fr;gap:10px}.kv>div{padding:10px;background:#fafafa;border-radius:10px}.lab{font-size:11px;color:#667085}.val{font-weight:700;margin-top:3px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.form{padding:14px}.form label{display:block;font-size:13px;font-weight:700;margin-top:10px}.form label span{display:block;margin-bottom:5px}.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.notice{display:none;margin-top:12px;padding:10px 12px;border:1px solid #d1d5db;border-left:4px solid #0f766e;border-radius:10px;background:#fff}.foot{text-align:center;color:#667085;font-size:12px;margin-top:18px}@media(max-width:640px){.top{display:block}.tabs{margin-top:10px}.search,.kv,.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="app">
+  <div class="top">
+    <div><div class="brand">総和 工事進捗管理</div><div class="sub">お客様操作用・簡易デモ</div></div>
+    <div class="tabs">
+      <button type="button" class="tab active" data-view="home">今日の予定</button>
+      <button type="button" class="tab" data-view="cases">案件一覧</button>
+      <button type="button" class="tab" data-view="resident">入居者入力</button>
+    </div>
+  </div>
+  <div id="notice" class="notice"></div>
+
+  <section id="view-home">
+    <div class="stats">
+      <div class="card stat"><div class="k">進行中案件</div><div class="v">6</div></div>
+      <div class="card stat"><div class="k">本日現調</div><div class="v">2</div></div>
+      <div class="card stat"><div class="k">本日工事</div><div class="v">1</div></div>
+    </div>
+    <div class="card"><div class="title">本日の現調</div>
+      <button type="button" class="row jump" data-id="c1"><span><span class="main">9:00　○○マンション 101号室</span><span class="muted">担当：佐藤</span></span><b>›</b></button>
+      <button type="button" class="row jump" data-id="c2"><span><span class="main">13:00　△△ハイツ 202号室</span><span class="muted">担当：鈴木</span></span><b>›</b></button>
+    </div>
+    <div class="card"><div class="title">本日の工事</div>
+      <button type="button" class="row jump" data-id="c3"><span><span class="main">9:00　□□コーポ 301号室</span><span class="muted">担当：山田班</span></span><b>›</b></button>
+    </div>
+    <div class="card"><div class="title">日程未確定</div>
+      <button type="button" class="row jump" data-id="c4"><span><span class="main">○○マンション 102号室</span><span class="muted">入居者回答待ち</span></span><b>›</b></button>
+      <button type="button" class="row jump" data-id="c5"><span><span class="main">◇◇ハイツ 105号室</span><span class="muted">施工担当未定</span></span><b>›</b></button>
+    </div>
+  </section>
+
+  <section id="view-cases" class="hidden">
+    <div class="search">
+      <input id="search" class="input" type="search" placeholder="物件名・部屋・担当者で検索">
+      <select id="filter" class="select"><option value="all">すべて</option><option>現調調整中</option><option>材料手配中</option><option>施工予定</option><option>見積中</option><option>完了</option></select>
+    </div>
+    <div id="caseList"></div>
+  </section>
+
+  <section id="view-detail" class="hidden">
+    <button type="button" id="back" class="btn" style="margin-top:12px">← 案件一覧へ</button>
+    <div id="detailCard" class="card detail"></div>
+  </section>
+
+  <section id="view-resident" class="hidden">
+    <form id="residentForm" class="card form">
+      <div style="font-size:18px;font-weight:800">現地調査 希望日時のご入力</div>
+      <div class="muted">QRコードから開く入居者向け画面のイメージです。</div>
+      <label><span>物件名</span><input class="input" name="property" value="○○マンション" required></label>
+      <div class="two">
+        <label><span>部屋番号</span><input class="input" name="room" placeholder="101号室" required></label>
+        <label><span>お名前</span><input class="input" name="name" placeholder="山田 太郎" required></label>
+      </div>
+      <label><span>電話番号</span><input class="input" name="phone" placeholder="090-1234-5678" required></label>
+      <div class="two">
+        <label><span>第1希望</span><input class="input" name="date1" type="date" value="2026-09-03" required></label>
+        <label><span>時間帯</span><select class="select" name="time1"><option>9:00〜12:00</option><option>13:00〜15:00</option><option>15:00〜17:00</option></select></label>
+      </div>
+      <label><span>その他連絡事項</span><textarea class="textarea" rows="3" name="note"></textarea></label>
+      <button type="submit" class="btn primary" style="width:100%;margin-top:14px">希望日時を送信する</button>
+    </form>
+  </section>
+  <div class="foot">※このデモは説明用です。入力内容は再読み込みで初期状態に戻ります。</div>
+</main>
+<script>
+(function(){
+  'use strict';
+  var cases=[
+    {id:'c1',p:'○○マンション',r:'101号室',s:'現調調整中',next:'現調実施',staff:'佐藤',work:'未定',address:'東京都○○区○○町1-2-3',owner:'○○管理株式会社'},
+    {id:'c2',p:'△△ハイツ',r:'202号室',s:'現調調整中',next:'現調実施',staff:'鈴木',work:'未定',address:'東京都△△区△△町3-4-5',owner:'△△不動産'},
+    {id:'c3',p:'□□コーポ',r:'301号室',s:'施工予定',next:'施工実施',staff:'佐藤',work:'山田班',address:'埼玉県□□市□□1-1-1',owner:'□□管理'},
+    {id:'c4',p:'○○マンション',r:'102号室',s:'現調調整中',next:'入居者回答待ち',staff:'佐藤',work:'未定',address:'東京都○○区○○町1-2-3',owner:'○○管理株式会社'},
+    {id:'c5',p:'◇◇ハイツ',r:'105号室',s:'材料手配中',next:'施工担当設定',staff:'鈴木',work:'未定',address:'千葉県◇◇市◇◇2-2-2',owner:'◇◇プロパティ'},
+    {id:'c6',p:'△○マンション',r:'203号室',s:'見積中',next:'見積提出',staff:'佐藤',work:'未定',address:'東京都△○区1-5-2',owner:'△○管理'}
+  ];
+  function $(id){return document.getElementById(id)}
+  function show(view){
+    ['home','cases','detail','resident'].forEach(function(v){$('view-'+v).classList.toggle('hidden',v!==view)});
+    document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-view')===view || (view==='detail' && b.getAttribute('data-view')==='cases'))});
+  }
+  function message(text){var n=$('notice');n.textContent=text;n.style.display='block';window.setTimeout(function(){n.style.display='none'},2500)}
+  function renderList(){
+    var q=$('search').value.toLowerCase(); var f=$('filter').value;
+    var filtered=cases.filter(function(c){return (f==='all'||c.s===f) && (c.p+' '+c.r+' '+c.staff+' '+c.work).toLowerCase().indexOf(q)>-1});
+    $('caseList').innerHTML='';
+    filtered.forEach(function(c){
+      var b=document.createElement('button'); b.type='button'; b.className='case'; b.setAttribute('data-id',c.id);
+      b.innerHTML='<div class="caseHead"><div><b>'+c.p+' '+c.r+'</b><div class="muted">次：'+c.next+' ／ 現調：'+c.staff+' ／ 工事：'+c.work+'</div></div><span class="badge">'+c.s+'</span></div>';
+      b.addEventListener('click',function(){openDetail(c.id)}); $('caseList').appendChild(b);
+    });
+  }
+  function openDetail(id){
+    var c=cases.find(function(x){return x.id===id}); if(!c)return;
+    $('detailCard').innerHTML='<div class="caseHead"><div><div style="font-size:20px;font-weight:800">'+c.p+' '+c.r+'</div><div class="muted">'+c.address+'</div></div><span class="badge">'+c.s+'</span></div><div class="kv" style="margin-top:14px"><div><div class="lab">管理会社</div><div class="val">'+c.owner+'</div></div><div><div class="lab">次のアクション</div><div class="val">'+c.next+'</div></div><div><div class="lab">現調担当</div><div class="val">'+c.staff+'</div></div><div><div class="lab">工事担当</div><div class="val">'+c.work+'</div></div></div><div class="actions"><button type="button" id="advance" class="btn primary">次の工程へ進める</button><button type="button" id="assign" class="btn">工事担当を山田班に設定</button></div>';
+    $('advance').addEventListener('click',function(){
+      var order=['現調調整中','見積中','材料手配中','施工予定','完了']; var i=order.indexOf(c.s);
+      if(i<order.length-1){c.s=order[i+1];c.next=c.s==='見積中'?'見積提出':c.s==='材料手配中'?'材料発注':c.s==='施工予定'?'施工実施':'完了報告';message('ステータスを「'+c.s+'」に更新しました');renderList();openDetail(c.id)}else{message('この案件は完了しています')}
+    });
+    $('assign').addEventListener('click',function(){c.work='山田班';if(c.next==='施工担当設定')c.next='施工日確認';message('工事担当を山田班に設定しました');renderList();openDetail(c.id)});
+    show('detail');
+  }
+  document.querySelectorAll('.tab').forEach(function(b){b.addEventListener('click',function(){var v=b.getAttribute('data-view');show(v);if(v==='cases')renderList()})});
+  document.querySelectorAll('.jump').forEach(function(b){b.addEventListener('click',function(){openDetail(b.getAttribute('data-id'))})});
+  $('back').addEventListener('click',function(){renderList();show('cases')});
+  $('search').addEventListener('input',renderList); $('filter').addEventListener('change',renderList);
+  $('residentForm').addEventListener('submit',function(e){e.preventDefault();var fd=new FormData(e.target);var room=String(fd.get('room')||'');var name=String(fd.get('name')||'');message('希望日時を受け付けました：'+room+' '+name+'様');});
+  renderList(); show('home');
+})();
+</script>
+</body>
+</html>
