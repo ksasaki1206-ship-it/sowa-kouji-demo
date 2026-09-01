@@ -21,6 +21,7 @@ const legacy = migrateState({
   responses:[{ id:'legacy-response', caseId:'legacy-1', property:'既存物件', room:'101号室', name:'既存入居者', receivedAt:'2026-08-01T10:00:00.000Z' }],
   cases:[{
     id:'legacy-1', property:'既存物件', room:'101号室', status:'問い合わせ',
+    surveyStaff:'既存職人', surveyAt:'2026-09-02T10:00', workStaff:'既存職人', workAt:'2026-09-03T13:00',
     workflowHistory:[{ step:'inquiry', completedAt:'2026-08-01T08:00:00.000Z', completedBy:'事務所' }],
     photos:{ survey:['data:image/png;base64,AAAA'] }
   }]
@@ -32,6 +33,13 @@ assert.equal(legacyCase.photoMetadata.survey[0].storageProvider, 'localStorage')
 assert.equal(legacyCase.workflowHistory[0].step, 'inquiry');
 assert.equal(legacy.auditLogs[0].detail, '既存履歴');
 assert.equal(legacy.responses[0].name, '既存入居者');
+assert.equal(legacyCase.surveyDurationMinutes, 60);
+assert.equal(legacyCase.workDurationMinutes, 180);
+assert.equal(Boolean(legacyCase.surveyStaffId), true);
+assert.equal(legacyCase.surveyStaffId, legacyCase.workStaffId);
+const inferredStaff = legacy.staff.find(item => item.name === '既存職人');
+assert.equal(inferredStaff.canSurvey, true);
+assert.equal(inferredStaff.canWork, true);
 
 localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
 const access = createLocalDataAccess();
@@ -69,6 +77,12 @@ assert.equal(access.photos.remove('test-case', 'after', 0).id, photo.id);
 
 assert.equal(access.users.get('西山さん').role, 'admin');
 assert.equal(access.users.list().length, 5);
+const addedStaff = { id:'staff-test', name:'テスト班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true };
+assert.equal(access.staff.create(addedStaff).name, 'テスト班');
+access.staff.update('staff-test', { active:false });
+assert.equal(access.staff.get('staff-test').active, false);
+assert.equal(access.staff.getByName('既存職人').id, legacyCase.surveyStaffId);
+assert.equal(access.staff.getByLoginUserId('worker-a').name, '職人A');
 assert.equal(access.snapshot.save(), true);
 assert.equal(JSON.parse(localStorage.getItem(STORAGE_KEY)).cases.some(item => item.id === 'test-case'), true);
 assert.equal(state, access.snapshot.current());
@@ -83,6 +97,7 @@ assert.equal(JSON.parse(localStorage.getItem(CREDENTIALS_KEY)).users.nishiyama.h
 assert.equal(access.users.list().some(user => 'hash' in user || 'password' in user), false);
 assert.equal(JSON.stringify(access.snapshot.current()).includes('existing-changed-password-hash'), false);
 await resetAllPasswords();
+for (const name of ['西山さん','高橋さん','一さん','事務所','職人A']) assert.equal((await authenticate(name, 'password')).user, name);
 assert.equal((await authenticate('西山さん', 'password')).role, 'admin');
 assert.equal((await changeOwnPassword('西山さん', 'password', 'new-password')).ok, true);
 assert.equal(await authenticate('西山さん', 'password'), null);
@@ -96,6 +111,8 @@ assert.equal(getSession(), null);
 
 const reset = access.snapshot.reset();
 assert.equal(reset.cases.some(item => item.id === 'test-case'), false);
+assert.equal(Boolean(reset.cases.find(item => item.id === 'c1').surveyStaffId), true);
+assert.equal(Boolean(reset.cases.find(item => item.id === 'c5').workStaffId), true);
 assert.equal(access.snapshot.current(), reset);
 
 console.log('data-access tests: ok');

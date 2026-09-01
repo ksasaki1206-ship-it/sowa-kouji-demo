@@ -1,16 +1,18 @@
-import { STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
 import { dataAccess } from './data-access.js';
 import { addAudit, auditChanges } from './audit.js';
-import { USERS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, responseForCase as workflowResponseForCase } from './workflow.js';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;
 let noticeTimer = 0;
 let sessionUser = '';
+let sessionUserId = '';
 let sessionRole = '';
 let scheduleMode = 'property';
 let pendingPhotoAction = null;
+let pendingConflictAction = null;
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -20,6 +22,32 @@ const datePart = value => value ? value.slice(0, 10) : '';
 const properties = () => [...new Set(dataAccess.cases.list().map(c => c.property).filter(Boolean))].sort();
 const caseById = id => dataAccess.cases.get(id);
 const responseForCase = c => workflowResponseForCase(state, c);
+const staffList = () => dataAccess.staff.list();
+const staffById = id => id ? dataAccess.staff.get(id) : null;
+const ownsCase = c => workerOwnsCase(c, sessionUser, sessionUserId, staffList());
+
+function formatPlan(at, durationMinutes, includeDate = true) {
+  if (!at) return '未定';
+  return `${includeDate ? `${fmtDate(at.slice(0,10))} ` : ''}${formatScheduleRange(at, durationMinutes)}`;
+}
+
+function populateAssignmentSelect(select, capability, selectedId = '', selectedName = '') {
+  const candidates = staffList().filter(person => person.active && person[capability]);
+  const selected = staffById(selectedId);
+  if (selected && !candidates.some(person => person.id === selected.id)) candidates.push(selected);
+  select.innerHTML = `<option value="">未定</option>${candidates.map(person => `<option value="${esc(person.id)}">${esc(person.name)}${person.active ? '' : '（無効・既存）'}</option>`).join('')}`;
+  if (selectedId && [...select.options].some(option => option.value === selectedId)) select.value = selectedId;
+  else if (selectedName && selectedName !== '未定') {
+    const legacy = staffList().find(person => person.name === selectedName);
+    if (legacy && [...select.options].some(option => option.value === legacy.id)) select.value = legacy.id;
+  }
+}
+
+function updateEndPreviews() {
+  const form = $('caseForm');
+  $('surveyEndPreview').textContent = `終了予定：${formatPlan(form.elements.surveyAt.value, form.elements.surveyDurationMinutes.value, false)}`;
+  $('workEndPreview').textContent = `終了予定：${formatPlan(form.elements.workAt.value, form.elements.workDurationMinutes.value, false)}`;
+}
 
 function persist(message) {
   if (!dataAccess.snapshot.save()) return notify('保存容量を超えました。写真を減らしてください。');
@@ -108,11 +136,12 @@ function renderHome() {
 }
 
 function workerEventHtml(event) {
-  return `<button class="worker-event open-case" data-id="${esc(event.item.id)}"><div class="worker-time">${esc(event.at.slice(11,16))}</div><div class="event-kind ${event.type}">${esc(event.label)}</div><div class="worker-place"><b>${esc(event.item.property)} ${esc(event.item.room)}</b><span>${esc(event.item.address || '住所未登録')}</span><small>${esc(event.item.note || '備考なし')} ／ ${esc(event.item.status)}</small></div><span class="arrow">›</span></button>`;
+  return `<button class="worker-event open-case" data-id="${esc(event.item.id)}"><div class="worker-time">${esc(formatScheduleRange(event.at, event.durationMinutes))}</div><div class="event-kind ${event.type}">${esc(event.label)}</div><div class="worker-place"><b>${esc(event.item.property)} ${esc(event.item.room)}</b><span>${esc(event.item.address || '住所未登録')}</span><small>${esc(event.item.note || '備考なし')} ／ ${esc(event.item.status)}</small></div><span class="arrow">›</span></button>`;
 }
 
 function renderWorkerHome() {
-  const events = getStaffEvents(state, 'week').filter(event => event.staff === sessionUser);
+  const linkedStaff = staffList().find(person => person.loginUserId === sessionUserId);
+  const events = getStaffEvents(state, 'week').filter(event => linkedStaff ? event.staffId === linkedStaff.id || event.staff === sessionUser : event.staff === sessionUser);
   const today = todayKey();
   const todayEvents = events.filter(event => datePart(event.at) === today);
   $('workerTodayCount').textContent = `${todayEvents.length}件`;
@@ -127,7 +156,7 @@ function renderCases() {
   const query = $('search').value.trim().toLowerCase();
   const selected = filter.value;
   const preset = $('casePreset').value;
-  const cases = dataAccess.cases.list().filter(c => (sessionRole !== 'worker' || workerOwnsCase(c, sessionUser)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
+  const cases = dataAccess.cases.list().filter(c => (sessionRole !== 'worker' || ownsCase(c)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
   const presetLabel = $('casePreset').selectedOptions[0]?.textContent || '';
   $('activeCaseFilterText').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
   $('activeCaseFilter').classList.toggle('hidden', preset === 'all');
@@ -161,10 +190,11 @@ function workflowTimelineHtml(c) {
 
 function openWorkerDetail(c) {
   currentCaseId = c.id;
-  const workAssigned = c.workStaff === sessionUser;
+  const linkedStaff = staffList().find(person => person.loginUserId === sessionUserId);
+  const workAssigned = linkedStaff ? c.workStaffId === linkedStaff.id || c.workStaff === sessionUser : c.workStaff === sessionUser;
   $('detailCard').innerHTML = `
     <section class="card worker-detail-head"><span class="event-kind ${workAssigned ? 'work' : 'survey'}">${workAssigned ? '工事' : '現調'}</span><h1>${esc(c.property)} ${esc(c.room)}</h1><span class="badge">${esc(c.status)}</span></section>
-    <section class="card worker-info"><div><span class="lab">住所</span><b>${esc(c.address || '住所未登録')}</b></div><div><span class="lab">日時</span><b>${esc(fmtDateTime(workAssigned ? c.workAt : c.surveyAt))}</b></div><div><span class="lab">現場備考</span><b>${esc(c.note || 'なし')}</b></div></section>
+    <section class="card worker-info"><div><span class="lab">住所</span><b>${esc(c.address || '住所未登録')}</b></div><div><span class="lab">日時</span><b>${esc(formatPlan(workAssigned ? c.workAt : c.surveyAt, workAssigned ? c.workDurationMinutes : c.surveyDurationMinutes))}</b></div><div><span class="lab">現場備考</span><b>${esc(c.note || 'なし')}</b></div></section>
     <section class="card detail-card"><h2 class="section-title">必要写真</h2><div class="worker-photo-status">${['before','during','after'].map(key => `<span class="${c.photos[key].length ? 'ok' : 'missing'}">${esc(PHOTO_GROUPS[key])} ${c.photos[key].length}枚</span>`).join('')}</div><div class="gallery worker-gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
     ${workAssigned ? '<button id="workerCompleteButton" class="btn primary worker-complete" type="button">作業完了報告</button>' : ''}
     <section class="card detail-card"><h2 class="section-title">工程</h2>${workflowTimelineHtml(c)}</section>`;
@@ -178,7 +208,7 @@ function openDetail(id) {
   const c = caseById(id);
   if (!c) return;
   if (sessionRole === 'worker') {
-    if (!workerOwnsCase(c, sessionUser)) return notify('担当案件のみ確認できます。');
+    if (!ownsCase(c)) return notify('担当案件のみ確認できます。');
     return openWorkerDetail(c);
   }
   currentCaseId = id;
@@ -187,10 +217,10 @@ function openDetail(id) {
     <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div><div class="muted">${esc(c.residentName || '入居者名未登録')}</div></div><span class="badge">${esc(c.status)}</span></div><div class="kv"><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
     <section class="card detail-card action-card"><div class="lab">次のアクション</div><div class="big">${esc(nextAction(c))}</div>${alerts.length ? `<div class="detail-alerts">${alerts.map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div>` : '<div class="muted">現在、要対応アラートはありません。</div>'}</section>
     <section class="card detail-card"><h2 class="section-title">入居者回答</h2>${answerHtml(c)}</section>
-    <section class="card detail-card"><h2 class="section-title">現調</h2><div class="kv"><div><div class="lab">現調担当</div><div class="val">${esc(c.surveyStaff)}</div></div><div><div class="lab">現調予定日時</div><div class="val">${esc(fmtDateTime(c.surveyAt))}</div></div></div><div class="gallery single-gallery">${photoGroupHtml(c,'survey',PHOTO_GROUPS.survey)}</div></section>
+    <section class="card detail-card"><h2 class="section-title">現調</h2><div class="kv"><div><div class="lab">現調担当</div><div class="val">${esc(c.surveyStaff)}</div></div><div><div class="lab">現調予定時間</div><div class="val">${esc(formatPlan(c.surveyAt, c.surveyDurationMinutes))}</div></div></div><div class="gallery single-gallery">${photoGroupHtml(c,'survey',PHOTO_GROUPS.survey)}</div></section>
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
     <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
-    <section class="card detail-card"><h2 class="section-title">工事</h2><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定日時</div><div class="val">${esc(fmtDateTime(c.workAt))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
+    <section class="card detail-card"><h2 class="section-title">工事</h2><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定時間</div><div class="val">${esc(formatPlan(c.workAt, c.workDurationMinutes))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
     <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button></div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
     <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
@@ -255,7 +285,7 @@ function compressImage(file) {
 }
 
 async function handleFiles(c, key, fileList) {
-  if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && workerOwnsCase(c, sessionUser)))) return notify('写真を追加する権限がありません。');
+  if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && ownsCase(c)))) return notify('写真を追加する権限がありません。');
   const files = Array.from(fileList || []).slice(0, 6);
   if (!files.length) return;
   try {
@@ -273,7 +303,7 @@ async function handleFiles(c, key, fileList) {
 }
 
 function deletePhoto(c, key, index) {
-  if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && workerOwnsCase(c, sessionUser)))) return notify('写真を削除する権限がありません。');
+  if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && ownsCase(c)))) return notify('写真を削除する権限がありません。');
   if (!dataAccess.photos.remove(c.id, key, index)) return notify('写真が見つかりません。');
   addAudit(state, c, `${PHOTO_GROUPS[key]}を1枚削除`);
   persist('写真を削除しました。');
@@ -288,7 +318,10 @@ function openCaseModal(c) {
   form.reset();
   form.elements.id.value = c?.id || '';
   const source = c || createCase();
-  ['property','room','address','owner','status','surveyStaff','surveyAt','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workStaff','workAt','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
+  ['property','room','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
+  populateAssignmentSelect(form.elements.surveyStaffId, 'canSurvey', source.surveyStaffId, source.surveyStaff);
+  populateAssignmentSelect(form.elements.workStaffId, 'canWork', source.workStaffId, source.workStaff);
+  updateEndPreviews();
   form.elements.property.focus();
 }
 
@@ -302,10 +335,17 @@ function saveCaseForm(event) {
   const id = data.get('id');
   const existing = id ? caseById(id) : null;
   const c = existing || createCase();
-  const keys = ['property','room','address','owner','status','surveyStaff','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workStaff','workAt','nextActionOverride','note'];
+  const keys = ['property','room','address','owner','status','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','nextActionOverride','note'];
   const values = Object.fromEntries(keys.map(key => [key, data.get(key) || '']));
   values.estimateAmount = Number(data.get('estimateAmount') || 0);
-  const commit = () => {
+  values.surveyDurationMinutes = Math.max(15, Number(data.get('surveyDurationMinutes') || DEFAULT_DURATIONS.survey));
+  values.workDurationMinutes = Math.max(15, Number(data.get('workDurationMinutes') || DEFAULT_DURATIONS.work));
+  values.surveyStaffId = data.get('surveyStaffId') || '';
+  values.workStaffId = data.get('workStaffId') || '';
+  values.surveyStaff = staffById(values.surveyStaffId)?.name || '未定';
+  values.workStaff = staffById(values.workStaffId)?.name || '未定';
+  const proposal = { ...c, ...values };
+  const commit = (ignoredConflicts = []) => {
     const before = existing ? clone(existing) : null;
     Object.assign(c, values);
     if (!existing) {
@@ -316,6 +356,10 @@ function saveCaseForm(event) {
       dataAccess.cases.update(c.id, values);
       auditChanges(state, before, c);
     }
+    if (ignoredConflicts.length) {
+      const labels = [...new Set(ignoredConflicts.map(conflict => conflict.candidate.label))].join('・');
+      addAudit(state, c, `重複警告を確認した上で${labels}予定を登録`);
+    }
     recordWorkflowStep(c, c.status, sessionUser);
     if (c.materialOrderedAt) recordWorkflowStep(c, '材料手配中', sessionUser, `${c.materialOrderedAt}T12:00`);
     if (c.materialReceivedAt) recordWorkflowStep(c, '材料納品済', sessionUser, `${c.materialReceivedAt}T12:00`);
@@ -324,11 +368,42 @@ function saveCaseForm(event) {
     renderCases();
     if (currentCaseId === c.id) openDetail(c.id);
   };
-  existing?.status === values.status ? commit() : requestPhotoCheckedAction(c, values.status, commit);
+  const proceed = ignoredConflicts => existing?.status === values.status ? commit(ignoredConflicts) : requestPhotoCheckedAction(c, values.status, () => commit(ignoredConflicts));
+  const conflicts = findScheduleConflicts(state, proposal, existing?.id || proposal.id);
+  if (conflicts.length) return openConflictWarning(conflicts, () => proceed(conflicts));
+  proceed([]);
+}
+
+function closeConflictWarning() {
+  $('conflictModal').classList.add('hidden');
+  pendingConflictAction = null;
+}
+
+function openConflictWarning(conflicts, proceed) {
+  const first = conflicts[0];
+  pendingConflictAction = { conflicts, proceed, staffId:first.candidate.staffId, staff:first.candidate.staff, date:first.candidate.at.slice(0,10) };
+  $('conflictDetails').innerHTML = conflicts.map(({ candidate, conflicting }) => `<article class="conflict-item"><b>${esc(candidate.staff)}は同時間帯に別の予定があります。</b><div>${esc(conflicting.item.property)} ${esc(conflicting.item.room)}</div><div>${esc(conflicting.label)} ${esc(formatScheduleRange(conflicting.at, conflicting.durationMinutes))}</div><small>登録予定：${esc(candidate.label)} ${esc(formatScheduleRange(candidate.at, candidate.durationMinutes))}</small></article>`).join('');
+  $('conflictModal').classList.remove('hidden');
+}
+
+function reviewConflictSchedule() {
+  const pending = pendingConflictAction;
+  closeConflictWarning();
+  if (!pending) return;
+  closeCaseModal();
+  scheduleMode = 'staff';
+  $('scheduleScope').value = 'date';
+  $('scheduleDate').value = pending.date;
+  show('schedule');
+  setScheduleMode('staff');
+  if ([...$('scheduleStaff').options].some(option => option.value === pending.staffId)) $('scheduleStaff').value = pending.staffId;
+  renderStaffSchedule();
 }
 
 function openWorkerCompletion(c) {
-  if (!can(sessionRole, 'completeOwn') || c.workStaff !== sessionUser) return notify('完了報告できるのは施工担当案件のみです。');
+  const linkedStaff = staffList().find(person => person.loginUserId === sessionUserId);
+  const assigned = linkedStaff ? c.workStaffId === linkedStaff.id || c.workStaff === sessionUser : c.workStaff === sessionUser;
+  if (!can(sessionRole, 'completeOwn') || !assigned) return notify('完了報告できるのは施工担当案件のみです。');
   const form = $('workerCompleteForm');
   form.reset();
   form.elements.caseId.value = c.id;
@@ -374,7 +449,7 @@ function monthDays() {
 
 function scheduleTable(cases, days) {
   const staffLabel = value => value && value !== '未定' ? value : '担当未定';
-  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><button class="schedule-room-link open-case" type="button" data-id="${esc(c.id)}" aria-label="${esc(`${c.property} ${c.room}の案件詳細`)}"><b>${esc(c.room)}</b><span>${esc(c.residentName || '未登録')}</span></button></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event survey open-case" data-id="${esc(c.id)}" aria-label="現調 ${esc(c.surveyAt.slice(11,16))} ${esc(staffLabel(c.surveyStaff))}"><span>現調</span><time>${esc(c.surveyAt.slice(11,16))}</time><small title="${esc(staffLabel(c.surveyStaff))}">${esc(staffLabel(c.surveyStaff))}</small></a>` : ''}${datePart(c.workAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event work open-case" data-id="${esc(c.id)}" aria-label="工事 ${esc(c.workAt.slice(11,16))} ${esc(staffLabel(c.workStaff))}"><span>工事</span><time>${esc(c.workAt.slice(11,16))}</time><small title="${esc(staffLabel(c.workStaff))}">${esc(staffLabel(c.workStaff))}</small></a>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><button class="schedule-room-link open-case" type="button" data-id="${esc(c.id)}" aria-label="${esc(`${c.property} ${c.room}の案件詳細`)}"><b>${esc(c.room)}</b><span>${esc(c.residentName || '未登録')}</span></button></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event survey open-case" data-id="${esc(c.id)}" aria-label="現調 ${esc(formatScheduleRange(c.surveyAt, c.surveyDurationMinutes))} ${esc(staffLabel(c.surveyStaff))}"><span>現調</span><time>${esc(formatScheduleRange(c.surveyAt, c.surveyDurationMinutes))}</time><small title="${esc(staffLabel(c.surveyStaff))}">${esc(staffLabel(c.surveyStaff))}</small></a>` : ''}${datePart(c.workAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event work open-case" data-id="${esc(c.id)}" aria-label="工事 ${esc(formatScheduleRange(c.workAt, c.workDurationMinutes))} ${esc(staffLabel(c.workStaff))}"><span>工事</span><time>${esc(formatScheduleRange(c.workAt, c.workDurationMinutes))}</time><small title="${esc(staffLabel(c.workStaff))}">${esc(staffLabel(c.workStaff))}</small></a>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 }
 
 function alignScheduleToToday(scroll) {
@@ -469,6 +544,7 @@ function setDefaultResponseDates() {
 
 function showLogin() {
   sessionUser = '';
+  sessionUserId = '';
   sessionRole = '';
   $('appRoot').classList.add('hidden');
   $('loginView').classList.remove('hidden');
@@ -487,21 +563,25 @@ function setScheduleMode(mode) {
 
 function renderStaffSchedule() {
   const staffSelect = $('scheduleStaff');
-  const staff = [...new Set(dataAccess.cases.list().flatMap(c => [c.surveyStaff, c.workStaff]).filter(name => name && name !== '未定'))].sort((a,b) => a.localeCompare(b, 'ja'));
+  const staff = staffList().filter(person => person.active && (person.canSurvey || person.canWork)).sort((a,b) => a.name.localeCompare(b.name, 'ja'));
   const previous = staffSelect.value || 'all';
-  populateSelect(staffSelect, staff, '全担当者');
-  staffSelect.value = previous === 'all' || staff.includes(previous) ? previous : 'all';
+  staffSelect.innerHTML = '<option value="all">全担当者</option>' + staff.map(person => `<option value="${esc(person.id)}">${esc(person.name)}</option>`).join('');
+  staffSelect.value = previous === 'all' || staff.some(person => person.id === previous) ? previous : 'all';
   const scope = $('scheduleScope').value;
-  const allEvents = getStaffEvents(state, scope);
-  const events = staffSelect.value === 'all' ? allEvents : allEvents.filter(event => event.staff === staffSelect.value);
+  if (!$('scheduleDate').value) $('scheduleDate').value = todayKey();
+  $('scheduleDateLabel').classList.toggle('hidden', scope !== 'date');
+  const activeIds = new Set(staff.map(person => person.id));
+  const allEvents = getStaffEvents(state, scope, $('scheduleDate').value).filter(event => activeIds.has(event.staffId));
+  const events = staffSelect.value === 'all' ? allEvents : allEvents.filter(event => event.staffId === staffSelect.value);
   const surveyCount = events.filter(event => event.type === 'survey').length;
   const workCount = events.filter(event => event.type === 'work').length;
   const people = new Set(events.map(event => event.staff)).size;
   $('staffScheduleSummary').innerHTML = [['担当者',people,'人'],['現調',surveyCount,'件'],['工事',workCount,'件']].map(([label,count,unit]) => `<div class="summary"><span class="k">${label}</span><b>${count}</b><span class="muted">${unit}</span></div>`).join('');
-  const groups = staffSelect.value === 'all' ? [...new Set(events.map(event => event.staff))] : [staffSelect.value];
-  $('staffScheduleList').innerHTML = groups.map(name => {
-    const staffEvents = events.filter(event => event.staff === name);
-    return `<section class="card staff-group"><div class="title">${esc(name)} <span class="muted">${staffEvents.length}件</span></div>${staffEvents.map(event => `<button class="staff-event open-case" data-id="${esc(event.item.id)}"><span class="event-date">${esc(fmtDateTime(event.at))}</span><span class="event-kind ${event.type}">${esc(event.label)}</span><span class="event-place"><b>${esc(event.item.property)} ${esc(event.item.room)}</b><small>${esc(event.item.address || '住所未登録')}</small></span><span class="arrow">›</span></button>`).join('')}</section>`;
+  const groups = staffSelect.value === 'all' ? [...new Set(events.map(event => event.staffId))] : [staffSelect.value];
+  $('staffScheduleList').innerHTML = groups.map(staffId => {
+    const person = staffById(staffId);
+    const staffEvents = events.filter(event => event.staffId === staffId);
+    return `<section class="card staff-group"><div class="title">${esc(person?.name || staffEvents[0]?.staff || '担当者')} <span class="muted">${staffEvents.length}件</span></div>${staffEvents.map(event => `<button class="staff-event open-case" data-id="${esc(event.item.id)}"><span class="event-date">${esc(fmtDate(event.at.slice(0,10)))}<b>${esc(formatScheduleRange(event.at, event.durationMinutes))}</b></span><span class="event-kind ${event.type}">${esc(event.label)}</span><span class="event-place"><b>${esc(event.item.property)} ${esc(event.item.room)}</b><small>${esc(event.item.address || '住所未登録')} ／ 担当：${esc(event.staff)}</small></span><span class="arrow">›</span></button>`).join('')}</section>`;
   }).join('') || '<div class="card empty">選択期間の予定はありません。</div>';
   wireCaseLinks($('staffScheduleList'));
 }
@@ -538,11 +618,13 @@ function updateRoleUi(role) {
 function activateSession(session) {
   if (!session || !USERS.includes(session.user)) return showLogin();
   sessionUser = session.user;
+  sessionUserId = session.userId;
   sessionRole = session.role;
   state.currentUser = session.user;
   dataAccess.snapshot.save();
   $('loggedInUser').textContent = session.user;
   $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
+  $('staffAdminButton').classList.toggle('hidden', !can(session.role, 'manageStaff'));
   updateRoleUi(session.role);
   $('loginView').classList.add('hidden');
   $('appRoot').classList.remove('hidden');
@@ -602,13 +684,107 @@ function openUserAdmin() {
 
 function closeUserAdmin() { $('userAdminModal').classList.add('hidden'); }
 
+function resetStaffForm() {
+  const form = $('staffForm');
+  form.reset();
+  form.elements.id.value = '';
+  form.elements.active.checked = true;
+  setFormError('staffFormError', '');
+}
+
+function renderStaffAdmin() {
+  const typeLabels = STAFF_TYPES;
+  $('staffAdminList').innerHTML = staffList().slice().sort((a,b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'ja')).map(person => {
+    const login = USER_DEFINITIONS.find(user => user.id === person.loginUserId);
+    return `<article class="staff-admin-row ${person.active ? '' : 'inactive'}"><div class="staff-admin-main"><div><b>${esc(person.name)}</b><span class="badge">${esc(typeLabels[person.type] || person.type)}</span>${person.active ? '' : '<span class="badge inactive-badge">無効</span>'}</div><small>${person.canSurvey ? '現調可' : '現調不可'} ／ ${person.canWork ? '工事可' : '工事不可'} ／ ログイン：${esc(login?.name || '紐付けなし')}</small></div><div class="actions"><button class="btn edit-staff" type="button" data-id="${esc(person.id)}">編集</button><button class="btn toggle-staff ${person.active ? 'danger' : ''}" type="button" data-id="${esc(person.id)}">${person.active ? '無効化' : '有効化'}</button></div></article>`;
+  }).join('');
+  $('staffAdminList').querySelectorAll('.edit-staff').forEach(button => button.addEventListener('click', () => {
+    const person = dataAccess.staff.get(button.dataset.id);
+    if (!person) return;
+    const form = $('staffForm');
+    form.elements.id.value = person.id;
+    form.elements.name.value = person.name;
+    form.elements.type.value = person.type;
+    form.elements.loginUserId.value = person.loginUserId;
+    form.elements.canSurvey.checked = person.canSurvey;
+    form.elements.canWork.checked = person.canWork;
+    form.elements.active.checked = person.active;
+    form.elements.name.focus();
+  }));
+  $('staffAdminList').querySelectorAll('.toggle-staff').forEach(button => button.addEventListener('click', () => {
+    if (!can(sessionRole, 'manageStaff')) return;
+    const person = dataAccess.staff.get(button.dataset.id);
+    if (!person || !confirm(`${person.name}を${person.active ? '無効化' : '有効化'}しますか？`)) return;
+    const active = !person.active;
+    dataAccess.staff.update(person.id, { active });
+    addAudit(state, {}, `担当者「${person.name}」を${active ? '有効化' : '無効化'}`);
+    persist(`担当者を${active ? '有効化' : '無効化'}しました。`);
+    resetStaffForm();
+    renderStaffAdmin();
+  }));
+}
+
+function saveStaff(event) {
+  event.preventDefault();
+  if (!can(sessionRole, 'manageStaff')) return notify('この操作を行う権限がありません。');
+  const form = event.currentTarget;
+  const id = form.elements.id.value;
+  const existing = id ? dataAccess.staff.get(id) : null;
+  const values = {
+    name:form.elements.name.value.trim(),
+    type:form.elements.type.value,
+    canSurvey:form.elements.canSurvey.checked,
+    canWork:form.elements.canWork.checked,
+    loginUserId:form.elements.loginUserId.value,
+    active:form.elements.active.checked
+  };
+  if (!values.name) return setFormError('staffFormError', '表示名を入力してください。');
+  if (staffList().some(person => person.id !== id && person.name === values.name)) return setFormError('staffFormError', '同じ表示名の担当者が存在します。');
+  if (values.loginUserId && staffList().some(person => person.id !== id && person.loginUserId === values.loginUserId)) return setFormError('staffFormError', 'このログインユーザーは別の担当者に紐付いています。');
+  setFormError('staffFormError', '');
+  if (existing) {
+    const before = clone(existing);
+    const oldName = existing.name;
+    dataAccess.staff.update(existing.id, values);
+    if (oldName !== values.name) dataAccess.cases.list().forEach(item => {
+      if (item.surveyStaffId === existing.id) item.surveyStaff = values.name;
+      if (item.workStaffId === existing.id) item.workStaff = values.name;
+    });
+    const changes = [
+      oldName !== values.name ? `表示名：${oldName} → ${values.name}` : '',
+      before.type !== values.type ? `種別：${STAFF_TYPES[before.type] || before.type} → ${STAFF_TYPES[values.type] || values.type}` : '',
+      before.canSurvey !== values.canSurvey ? `現調担当可：${before.canSurvey ? 'ON' : 'OFF'} → ${values.canSurvey ? 'ON' : 'OFF'}` : '',
+      before.canWork !== values.canWork ? `工事担当可：${before.canWork ? 'ON' : 'OFF'} → ${values.canWork ? 'ON' : 'OFF'}` : '',
+      before.loginUserId !== values.loginUserId ? 'ログインユーザー紐付けを変更' : '',
+      before.active !== values.active ? `${values.active ? '有効化' : '無効化'}` : ''
+    ].filter(Boolean);
+    addAudit(state, {}, `担当者「${oldName}」を編集${changes.length ? `（${changes.join('、')}）` : ''}`);
+  } else {
+    const person = { id:`staff-${Date.now()}-${Math.random().toString(16).slice(2)}`, ...values };
+    dataAccess.staff.create(person);
+    addAudit(state, {}, `担当者「${person.name}」を追加`);
+  }
+  persist(existing ? '担当者を更新しました。' : '担当者を追加しました。');
+  resetStaffForm();
+  renderStaffAdmin();
+}
+
+function openStaffAdmin() {
+  if (!can(sessionRole, 'manageStaff')) return;
+  $('staffForm').elements.type.innerHTML = Object.entries(STAFF_TYPES).map(([value,label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
+  $('staffForm').elements.loginUserId.innerHTML = '<option value="">紐付けなし</option>' + USER_DEFINITIONS.map(user => `<option value="${esc(user.id)}">${esc(user.name)}</option>`).join('');
+  resetStaffForm();
+  renderStaffAdmin();
+  $('staffAdminModal').classList.remove('hidden');
+}
+
+function closeStaffAdmin() { $('staffAdminModal').classList.add('hidden'); }
+
 async function init() {
   await ensureCredentials();
   ensurePhase2Ui();
   populateSelect($('loginUser'), USERS);
   populateSelect($('statusSelect'), STATUSES);
-  populateSelect($('surveyStaffSelect'), SURVEY_STAFF);
-  populateSelect($('workStaffSelect'), WORK_STAFF);
   setDefaultResponseDates();
   persist();
   $('loginForm').addEventListener('submit', handleLogin);
@@ -620,6 +796,20 @@ async function init() {
   $('userAdminButton').addEventListener('click', openUserAdmin);
   $('closeUserAdminModal').addEventListener('click', closeUserAdmin);
   $('userAdminModal').addEventListener('click', event => { if (event.target === $('userAdminModal')) closeUserAdmin(); });
+  $('staffAdminButton').addEventListener('click', openStaffAdmin);
+  $('closeStaffAdminModal').addEventListener('click', closeStaffAdmin);
+  $('staffAdminModal').addEventListener('click', event => { if (event.target === $('staffAdminModal')) closeStaffAdmin(); });
+  $('staffForm').addEventListener('submit', saveStaff);
+  $('clearStaffForm').addEventListener('click', resetStaffForm);
+  ['surveyAt','surveyDurationMinutes','workAt','workDurationMinutes'].forEach(name => $('caseForm').elements[name].addEventListener('input', updateEndPreviews));
+  $('conflictReview').addEventListener('click', reviewConflictSchedule);
+  $('conflictProceed').addEventListener('click', () => {
+    const proceed = pendingConflictAction?.proceed;
+    closeConflictWarning();
+    proceed?.();
+  });
+  $('conflictCancel').addEventListener('click', closeConflictWarning);
+  $('conflictModal').addEventListener('click', event => { if (event.target === $('conflictModal')) closeConflictWarning(); });
   $('photoWarningAdd').addEventListener('click', () => {
     const c = pendingPhotoAction?.c;
     closePhotoWarning();
@@ -654,6 +844,7 @@ async function init() {
   document.querySelectorAll('[data-schedule-mode]').forEach(button => button.addEventListener('click', () => setScheduleMode(button.dataset.scheduleMode)));
   $('scheduleStaff').addEventListener('change', renderStaffSchedule);
   $('scheduleScope').addEventListener('change', renderStaffSchedule);
+  $('scheduleDate').addEventListener('change', renderStaffSchedule);
   $('historyUser').addEventListener('change', renderHistory);
   $('historyProperty').addEventListener('change', renderHistory);
   window.addEventListener('hashchange', () => {

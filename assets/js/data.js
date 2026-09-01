@@ -2,8 +2,21 @@ import { USERS } from './auth.js';
 
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
-export const SURVEY_STAFF = ['未定', '西山さん', '高橋さん', '一さん', '事務所', '職人A', '佐藤', '鈴木', '田中'];
-export const WORK_STAFF = ['未定', '西山さん', '高橋さん', '一さん', '事務所', '職人A', '山田班', '高橋班', '佐々木班'];
+export const STAFF_TYPES = Object.freeze({ employee:'社員', worker:'職人', contractor:'協力業者', team:'施工班' });
+export const DEFAULT_DURATIONS = Object.freeze({ survey:60, work:180 });
+export const INITIAL_STAFF = Object.freeze([
+  { id:'staff-nishiyama', name:'西山さん', type:'employee', canSurvey:true, canWork:true, loginUserId:'nishiyama', active:true },
+  { id:'staff-takahashi', name:'高橋さん', type:'employee', canSurvey:true, canWork:true, loginUserId:'takahashi', active:true },
+  { id:'staff-hajime', name:'一さん', type:'employee', canSurvey:true, canWork:true, loginUserId:'hajime', active:true },
+  { id:'staff-office', name:'事務所', type:'employee', canSurvey:true, canWork:true, loginUserId:'office', active:true },
+  { id:'staff-worker-a', name:'職人A', type:'worker', canSurvey:true, canWork:true, loginUserId:'worker-a', active:true },
+  { id:'staff-sato', name:'佐藤', type:'contractor', canSurvey:true, canWork:false, loginUserId:'', active:true },
+  { id:'staff-suzuki', name:'鈴木', type:'contractor', canSurvey:true, canWork:false, loginUserId:'', active:true },
+  { id:'staff-tanaka', name:'田中', type:'contractor', canSurvey:true, canWork:false, loginUserId:'', active:true },
+  { id:'staff-yamada-team', name:'山田班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true },
+  { id:'staff-takahashi-team', name:'高橋班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true },
+  { id:'staff-sasaki-team', name:'佐々木班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true }
+]);
 export const PHOTO_GROUPS = { survey: '現調写真', before: '施工前', during: '施工中', after: '施工後' };
 
 const dateKey = (offset = 0) => {
@@ -14,7 +27,9 @@ const dateKey = (offset = 0) => {
 
 const caseData = (data) => ({
   id: '', property: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
-  surveyStaff: '未定', surveyAt: '', workStaff: '未定', workAt: '', materialOrderedAt: '', materialDeliveryAt: '', materialReceivedAt: '',
+  surveyStaff: '未定', surveyStaffId: '', surveyAt: '', surveyDurationMinutes: DEFAULT_DURATIONS.survey,
+  workStaff: '未定', workStaffId: '', workAt: '', workDurationMinutes: DEFAULT_DURATIONS.work,
+  materialOrderedAt: '', materialDeliveryAt: '', materialReceivedAt: '',
   supplier: '', materialNote: '', estimateAmount: 0, note: '', nextActionOverride: '', residentResponseId: '', workflowHistory: [], photos: { survey: [], before: [], during: [], after: [] }, photoMetadata: { survey: [], before: [], during: [], after: [] },
   ...data
 });
@@ -22,6 +37,7 @@ const caseData = (data) => ({
 export function createInitialState() {
   return {
     currentUser: USERS[0],
+    staff: INITIAL_STAFF.map(item => ({ ...item })),
     auditLogs: [
       { id: 'a1', at: new Date().toISOString(), user: '事務所', property: '○○マンション', room: '101号室', caseId: 'c1', detail: 'デモ案件を登録' }
     ],
@@ -38,6 +54,18 @@ export function createInitialState() {
 
 const normalizePhotos = (photos = {}) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(key => [key, Array.isArray(photos[key]) ? photos[key] : []]));
 const normalizeWorkflowHistory = history => Array.isArray(history) ? history.filter(item => item && typeof item.step === 'string').map(item => ({ step:item.step, completedAt:item.completedAt || '', completedBy:item.completedBy || '' })) : [];
+const normalizeDuration = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.round(Number(value)) : fallback;
+const legacyStaffId = name => `staff-legacy-${Array.from(name || 'staff').reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) >>> 0, 7).toString(36)}`;
+const inferStaffType = name => name.endsWith('班') ? 'team' : 'contractor';
+const normalizeStaff = (item, index) => ({
+  id:String(item?.id || legacyStaffId(item?.name || `staff-${index}`)),
+  name:String(item?.name || '').trim(),
+  type:Object.hasOwn(STAFF_TYPES, item?.type) ? item.type : inferStaffType(String(item?.name || '')),
+  canSurvey:Boolean(item?.canSurvey),
+  canWork:Boolean(item?.canWork),
+  loginUserId:String(item?.loginUserId || ''),
+  active:item?.active !== false
+});
 const dataUrlMime = source => /^data:([^;,]+)/.exec(source || '')?.[1] || 'image/jpeg';
 const dataUrlSize = source => Math.max(0, Math.floor(((source || '').split(',')[1]?.length || 0) * .75));
 const normalizePhotoMetadata = (metadata = {}, photos, caseId) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(group => [group, photos[group].map((source, index) => {
@@ -69,7 +97,8 @@ export function migrateState(raw) {
     const photos = normalizePhotos(c.photos);
     return caseData({
     ...c, id, residentName: c.residentName || demo?.residentName || '', materialOrderedAt:c.materialOrderedAt || '', materialDeliveryAt: c.materialDeliveryAt || '', materialReceivedAt:c.materialReceivedAt || '', supplier:c.supplier || '', materialNote:c.materialNote || '',
-    estimateAmount: Number(c.estimateAmount || 0), nextActionOverride: c.nextActionOverride || '', residentResponseId: c.residentResponseId || '', workflowHistory:normalizeWorkflowHistory(c.workflowHistory), photos, photoMetadata:normalizePhotoMetadata(c.photoMetadata, photos, id)
+    estimateAmount: Number(c.estimateAmount || 0), nextActionOverride: c.nextActionOverride || '', residentResponseId: c.residentResponseId || '', workflowHistory:normalizeWorkflowHistory(c.workflowHistory), photos, photoMetadata:normalizePhotoMetadata(c.photoMetadata, photos, id),
+    surveyStaffId:c.surveyStaffId || '', workStaffId:c.workStaffId || '', surveyDurationMinutes:normalizeDuration(c.surveyDurationMinutes, DEFAULT_DURATIONS.survey), workDurationMinutes:normalizeDuration(c.workDurationMinutes, DEFAULT_DURATIONS.work)
   }); }) : fallback.cases;
   const usedIds = new Set(state.cases.map(c => c.id));
   fallback.cases.forEach(demo => {
@@ -79,6 +108,30 @@ export function migrateState(raw) {
     usedIds.add(added.id);
     state.cases.push(added);
   });
+  const savedStaff = Array.isArray(state.staff) ? state.staff.map(normalizeStaff).filter(item => item.name) : [];
+  INITIAL_STAFF.forEach(defaultStaff => {
+    if (!savedStaff.some(item => item.id === defaultStaff.id || item.name === defaultStaff.name)) savedStaff.push({ ...defaultStaff });
+  });
+  const ensureCaseStaff = (name, capability) => {
+    if (!name || name === '未定') return null;
+    let staff = savedStaff.find(item => item.name === name);
+    if (!staff) {
+      staff = normalizeStaff({ name, type:inferStaffType(name), canSurvey:capability === 'survey', canWork:capability === 'work', active:true }, savedStaff.length);
+      while (savedStaff.some(item => item.id === staff.id)) staff.id = `${staff.id}-${savedStaff.length + 1}`;
+      savedStaff.push(staff);
+    }
+    if (staff.id.startsWith('staff-legacy-')) staff[capability === 'survey' ? 'canSurvey' : 'canWork'] = true;
+    return staff;
+  };
+  state.cases.forEach(item => {
+    const surveyStaff = savedStaff.find(staff => staff.id === item.surveyStaffId) || ensureCaseStaff(item.surveyStaff, 'survey');
+    const workStaff = savedStaff.find(staff => staff.id === item.workStaffId) || ensureCaseStaff(item.workStaff, 'work');
+    if (surveyStaff && (item.surveyStaffId === surveyStaff.id || !item.surveyStaff || item.surveyStaff === '未定')) item.surveyStaff = surveyStaff.name;
+    if (workStaff && (item.workStaffId === workStaff.id || !item.workStaff || item.workStaff === '未定')) item.workStaff = workStaff.name;
+    item.surveyStaffId = item.surveyStaff && item.surveyStaff !== '未定' ? surveyStaff?.id || '' : '';
+    item.workStaffId = item.workStaff && item.workStaff !== '未定' ? workStaff?.id || '' : '';
+  });
+  state.staff = savedStaff;
   return state;
 }
 

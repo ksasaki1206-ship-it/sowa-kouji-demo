@@ -108,6 +108,32 @@ export const userRepository = Object.freeze({
   }
 });
 
+export const staffRepository = Object.freeze({
+  list(state) {
+    return array(state, 'staff');
+  },
+  get(state, id) {
+    return this.list(state).find(item => matchId(item, id)) || null;
+  },
+  getByName(state, name) {
+    return this.list(state).find(item => item.name === name) || null;
+  },
+  getByLoginUserId(state, loginUserId) {
+    return this.list(state).find(item => item.loginUserId === loginUserId) || null;
+  },
+  create(state, item) {
+    if (!item?.id || !item?.name || this.get(state, item.id)) return null;
+    this.list(state).push(item);
+    return item;
+  },
+  update(state, id, changes) {
+    const item = this.get(state, id);
+    if (!item) return null;
+    Object.assign(item, changes);
+    return item;
+  }
+});
+
 function ensurePhotoCollections(item) {
   item.photos = item.photos && typeof item.photos === 'object' ? item.photos : {};
   item.photoMetadata = item.photoMetadata && typeof item.photoMetadata === 'object' ? item.photoMetadata : {};
@@ -182,5 +208,6 @@ export const repositories = Object.freeze({
   auditLogs:auditRepository,
   workflows:workflowRepository,
   users:userRepository,
+  staff:staffRepository,
   photos:photoRepository
 });

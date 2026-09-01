@@ -1,4 +1,4 @@
-import { STATUSES } from './data.js';
+import { DEFAULT_DURATIONS, STATUSES } from './data.js';
 import { auditRepository, caseRepository, responseRepository, workflowRepository } from './repositories.js';
 
 const indexOfStatus = status => Math.max(0, STATUSES.indexOf(status));
@@ -23,8 +23,45 @@ export function recordWorkflowStep(item, status, user, completedAt = new Date().
   return Boolean(workflowRepository.create(null, item, { step, completedAt, completedBy:user || '' }));
 }
 
-export function workerOwnsCase(item, userName) {
+export function workerOwnsCase(item, userName, userId = '', staff = []) {
+  const linked = userId ? staff.find(person => person.loginUserId === userId) : null;
+  if (linked && (item.surveyStaffId === linked.id || item.workStaffId === linked.id)) return true;
   return Boolean(userName && (item.surveyStaff === userName || item.workStaff === userName));
+}
+
+export function scheduleEnd(at, durationMinutes) {
+  if (!at) return '';
+  const start = new Date(at);
+  if (Number.isNaN(start.getTime())) return '';
+  return new Date(start.getTime() + Math.max(1, Number(durationMinutes) || 0) * 60000).toISOString();
+}
+
+export function formatScheduleRange(at, durationMinutes) {
+  if (!at) return '未定';
+  const end = scheduleEnd(at, durationMinutes);
+  return `${at.slice(11,16)}〜${end ? new Date(end).toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit', hour12:false }) : '未定'}`;
+}
+
+export function caseScheduleEvents(item) {
+  return [
+    item.surveyAt && item.surveyStaff && item.surveyStaff !== '未定' ? { type:'survey', label:'現調', staff:item.surveyStaff, staffId:item.surveyStaffId || '', at:item.surveyAt, durationMinutes:Number(item.surveyDurationMinutes || DEFAULT_DURATIONS.survey), item } : null,
+    item.workAt && item.workStaff && item.workStaff !== '未定' ? { type:'work', label:'工事', staff:item.workStaff, staffId:item.workStaffId || '', at:item.workAt, durationMinutes:Number(item.workDurationMinutes || DEFAULT_DURATIONS.work), item } : null
+  ].filter(Boolean).map(event => ({ ...event, endAt:scheduleEnd(event.at, event.durationMinutes) }));
+}
+
+const sameStaff = (left, right) => left.staffId && right.staffId ? left.staffId === right.staffId : left.staff === right.staff;
+const overlaps = (left, right) => new Date(left.at).getTime() < new Date(right.endAt).getTime() && new Date(left.endAt).getTime() > new Date(right.at).getTime();
+
+export function findScheduleConflicts(state, candidateItem, excludeCaseId = candidateItem.id) {
+  const candidates = caseScheduleEvents(candidateItem);
+  const existing = caseRepository.list(state).filter(item => item.id !== excludeCaseId).flatMap(caseScheduleEvents);
+  const conflicts = candidates.flatMap(candidate => existing.filter(event => sameStaff(candidate, event) && overlaps(candidate, event)).map(conflicting => ({ candidate, conflicting })));
+  for (let left = 0; left < candidates.length; left += 1) {
+    for (let right = left + 1; right < candidates.length; right += 1) {
+      if (sameStaff(candidates[left], candidates[right]) && overlaps(candidates[left], candidates[right])) conflicts.push({ candidate:candidates[right], conflicting:candidates[left] });
+    }
+  }
+  return conflicts;
 }
 
 export function responseForCase(state, item) {
@@ -118,11 +155,8 @@ export function getDashboardMetrics(state) {
   };
 }
 
-export function getStaffEvents(state, scope = 'week') {
+export function getStaffEvents(state, scope = 'week', targetDate = '') {
   const today = todayKey();
-  const include = value => scope === 'today' ? dateOnly(value) === today : isThisWeek(value);
-  return caseRepository.list(state).flatMap(item => [
-    include(item.surveyAt) && item.surveyStaff !== '未定' ? { type:'survey', label:'現調', staff:item.surveyStaff, at:item.surveyAt, item } : null,
-    include(item.workAt) && item.workStaff !== '未定' ? { type:'work', label:'工事', staff:item.workStaff, at:item.workAt, item } : null
-  ].filter(Boolean)).sort((a, b) => a.at.localeCompare(b.at));
+  const include = value => scope === 'today' ? dateOnly(value) === today : scope === 'date' ? dateOnly(value) === targetDate : isThisWeek(value);
+  return caseRepository.list(state).flatMap(caseScheduleEvents).filter(event => include(event.at)).sort((a, b) => a.at.localeCompare(b.at));
 }

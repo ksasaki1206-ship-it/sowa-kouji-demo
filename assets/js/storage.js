@@ -22,7 +22,7 @@ export function saveState(state) {
 }
 
 export function resetState() {
-  const state = createInitialState();
+  const state = migrateState(createInitialState());
   saveState(state);
   return state;
 }

@@ -2,12 +2,13 @@ import { auditRepository } from './repositories.js';
 
 const LABELS = {
   property:'物件名', room:'部屋番号', address:'住所', owner:'管理会社 / オーナー', status:'ステータス',
-  surveyStaff:'現調担当', surveyAt:'現調日', estimateAmount:'見積金額', materialOrderedAt:'材料発注日', materialDeliveryAt:'材料納品予定日', materialReceivedAt:'材料納品確認日', supplier:'仕入先', materialNote:'材料メモ',
-  workStaff:'工事担当', workAt:'工事日', nextActionOverride:'次のアクション', note:'備考'
+  surveyStaff:'現調担当', surveyAt:'現調日', surveyDurationMinutes:'現調所要時間', estimateAmount:'見積金額', materialOrderedAt:'材料発注日', materialDeliveryAt:'材料納品予定日', materialReceivedAt:'材料納品確認日', supplier:'仕入先', materialNote:'材料メモ',
+  workStaff:'工事担当', workAt:'工事日', workDurationMinutes:'工事所要時間', nextActionOverride:'次のアクション', note:'備考'
 };
 
 const display = (key, value) => {
   if (key === 'estimateAmount') return `${Number(value || 0).toLocaleString('ja-JP')}円`;
+  if (key.endsWith('DurationMinutes')) return `${Number(value || 0)}分`;
   if (key.endsWith('At') && value) return String(value).replace('T', ' ').replaceAll('-', '/');
   return value === '' || value == null ? '未定' : String(value);
 };

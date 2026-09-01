@@ -32,6 +32,7 @@ export function createLocalDataAccess() {
     auditLogs:bindRepository(repositories.auditLogs, current),
     workflows:bindRepository(repositories.workflows, current),
     users:bindRepository(repositories.users, current),
+    staff:bindRepository(repositories.staff, current),
     photos:bindRepository(repositories.photos, current)
   });
 }
