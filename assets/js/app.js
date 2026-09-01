@@ -2,7 +2,7 @@ import { STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, to
 import { loadState, saveState, resetState } from './storage.js';
 import { addAudit, auditChanges } from './audit.js';
 import { USER_DEFINITIONS, USERS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
-import { getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, responseForCase as workflowResponseForCase } from './workflow.js';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, responseForCase as workflowResponseForCase } from './workflow.js';
 
 let state = loadState();
 let currentCaseId = null;
@@ -10,6 +10,7 @@ let noticeTimer = 0;
 let sessionUser = '';
 let sessionRole = '';
 let scheduleMode = 'property';
+let pendingPhotoAction = null;
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -41,10 +42,23 @@ function nextAction(c) {
   return getNextAction(state, c);
 }
 
+function ensurePhase2Ui() {
+  $('view-home').insertAdjacentHTML('afterend', '<section id="view-worker" class="view hidden"><div class="worker-hero"><div><span class="worker-kicker">職人用</span><h1>今日の現場</h1><p class="muted">担当している現場だけを表示します。</p></div><div id="workerTodayCount" class="worker-count">0件</div></div><div id="workerToday"></div><section class="home-section"><div class="section-head"><div><h2>今後7日間の担当予定</h2><p class="muted">現調と工事を時間順に表示します。</p></div></div><div id="workerUpcoming"></div></section></section>');
+  const nextActionLabel = $('caseForm').elements.nextActionOverride.closest('label');
+  const oldDelivery = $('caseForm').querySelector('input[name="materialDeliveryAt"]');
+  nextActionLabel.insertAdjacentHTML('beforebegin', '<div class="two material-fields"><label><span>材料発注日</span><input class="input" type="date" name="materialOrderedAt"></label><label><span>材料納品予定日</span><input class="input" type="date" name="materialDeliveryAt"></label></div><div class="two material-fields"><label><span>材料納品確認日</span><input class="input" type="date" name="materialReceivedAt"></label><label><span>仕入先</span><input class="input" name="supplier" placeholder="○○サッシ株式会社"></label></div><label class="material-fields"><span>材料メモ</span><textarea class="textarea" name="materialNote" placeholder="別便・不足部材など"></textarea></label>');
+  oldDelivery?.closest('label')?.remove();
+  ['material-unordered','material-overdue','after-photo-missing'].forEach((value, index) => $('casePreset').add(new Option(['材料未発注','納品遅延','施工後写真不足'][index], value)));
+  document.body.insertAdjacentHTML('beforeend', '<div id="photoWarningModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photoWarningTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="photoWarningTitle" class="big">施工後写真が未登録です</div></div><p>施工後写真が登録されていません。このまま工程を進めますか？</p><div class="warning-actions"><button id="photoWarningAdd" class="btn primary" type="button">写真を追加する</button><button id="photoWarningProceed" class="btn danger" type="button">このまま進める</button><button id="photoWarningCancel" class="btn" type="button">キャンセル</button></div></div></div><div id="workerCompleteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="workerCompleteTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="workerCompleteTitle" class="big">作業完了報告</div><button id="closeWorkerComplete" class="btn" type="button">閉じる</button></div><form id="workerCompleteForm" class="form"><input type="hidden" name="caseId"><div id="workerCompletePhoto" class="completion-photo"></div><label><span>完了報告・現場備考</span><textarea class="textarea" name="completionNote" placeholder="作業内容や申し送り"></textarea></label><label class="confirm-check"><input type="checkbox" name="confirmed" required><span>作業内容と写真を確認しました</span></label><button class="btn primary full" type="submit">完了を報告する</button></form></div></div>');
+}
+
 function show(view) {
-  ['home','cases','detail','schedule','responses','history'].forEach(name => $(`view-${name}`).classList.toggle('hidden', name !== view));
-  document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.view === view || (view === 'detail' && button.dataset.view === 'cases')));
-  if (view === 'home') renderHome();
+  if (sessionRole === 'worker' && !['home','detail'].includes(view)) view = 'home';
+  const effectiveView = view === 'home' && sessionRole === 'worker' ? 'worker' : view;
+  ['home','worker','cases','detail','schedule','responses','history'].forEach(name => $(`view-${name}`).classList.toggle('hidden', name !== effectiveView));
+  document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.view === view || (view === 'detail' && button.dataset.view === (sessionRole === 'worker' ? 'home' : 'cases'))));
+  if (effectiveView === 'home') renderHome();
+  if (effectiveView === 'worker') renderWorkerHome();
   if (view === 'cases') renderCases();
   if (view === 'schedule') scheduleMode === 'property' ? renderSchedule() : renderStaffSchedule();
   if (view === 'responses') renderResponses();
@@ -54,7 +68,7 @@ function show(view) {
 
 function caseRow(c) {
   const alerts = getCaseAlerts(state, c);
-  return `<button class="case open-case" data-id="${esc(c.id)}"><div class="caseHead"><div><b>${esc(c.property)} ${esc(c.room)}</b><div class="next-action">次：${esc(nextAction(c))}</div><div class="muted">現調：${esc(c.surveyStaff)} ／ 工事：${esc(c.workStaff)}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${alerts.length ? `<span class="badge alert-badge">要対応 ${alerts.length}</span>` : ''}</div></div></button>`;
+  return `<button class="case open-case" data-id="${esc(c.id)}"><div class="caseHead"><div><b>${esc(c.property)} ${esc(c.room)}</b><div class="next-action">次：${esc(nextAction(c))}</div><div class="muted">現調：${esc(c.surveyStaff)} ／ 工事：${esc(c.workStaff)}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${alerts.slice(0,2).map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div></div></button>`;
 }
 
 function wireCaseLinks(root = document) {
@@ -80,6 +94,27 @@ function renderHome() {
   const alerts = getAllAlerts(state).slice(0, 6);
   $('alertList').innerHTML = alerts.length ? alerts.map(({ item, label, priority, reason }) => `<button class="alert-row open-case" data-id="${esc(item.id)}"><span class="priority ${priority}">${priority === 'high' ? '優先' : '注意'}</span><span class="alert-body"><b>${esc(label)}</b><span>${esc(item.property)} ${esc(item.room)}</span><small>${esc(reason)}</small></span><span class="arrow">›</span></button>`).join('') : '<div class="card empty">現在、要対応案件はありません。</div>';
   wireCaseLinks($('alertList'));
+  let signals = $('managementSignals');
+  if (!signals) {
+    $('alertList').insertAdjacentHTML('afterend', '<div id="managementSignals" class="management-signals"></div>');
+    signals = $('managementSignals');
+  }
+  signals.innerHTML = [['材料未発注',metrics.materialUnordered,'material-unordered'],['納品遅延',metrics.materialOverdue,'material-overdue'],['施工後写真不足',metrics.photoMissing,'after-photo-missing']].map(([label,count,preset]) => `<button class="card signal-card" data-preset="${preset}"><span>${label}</span><b>${count}</b><small>件</small></button>`).join('');
+  signals.querySelectorAll('[data-preset]').forEach(button => button.addEventListener('click', () => openCasePreset(button.dataset.preset)));
+}
+
+function workerEventHtml(event) {
+  return `<button class="worker-event open-case" data-id="${esc(event.item.id)}"><div class="worker-time">${esc(event.at.slice(11,16))}</div><div class="event-kind ${event.type}">${esc(event.label)}</div><div class="worker-place"><b>${esc(event.item.property)} ${esc(event.item.room)}</b><span>${esc(event.item.address || '住所未登録')}</span><small>${esc(event.item.note || '備考なし')} ／ ${esc(event.item.status)}</small></div><span class="arrow">›</span></button>`;
+}
+
+function renderWorkerHome() {
+  const events = getStaffEvents(state, 'week').filter(event => event.staff === sessionUser);
+  const today = todayKey();
+  const todayEvents = events.filter(event => datePart(event.at) === today);
+  $('workerTodayCount').textContent = `${todayEvents.length}件`;
+  $('workerToday').innerHTML = todayEvents.length ? `<div class="card worker-events">${todayEvents.map(workerEventHtml).join('')}</div>` : '<div class="card empty">本日の担当現場はありません。</div>';
+  $('workerUpcoming').innerHTML = events.length ? `<div class="card worker-events">${events.map(event => `<div class="worker-date">${esc(fmtDate(event.at.slice(0,10)))}</div>${workerEventHtml(event)}`).join('')}</div>` : '<div class="card empty">今後7日間の担当予定はありません。</div>';
+  wireCaseLinks($('view-worker'));
 }
 
 function renderCases() {
@@ -88,7 +123,7 @@ function renderCases() {
   const query = $('search').value.trim().toLowerCase();
   const selected = filter.value;
   const preset = $('casePreset').value;
-  const cases = state.cases.filter(c => (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
+  const cases = state.cases.filter(c => (sessionRole !== 'worker' || workerOwnsCase(c, sessionUser)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
   const presetLabel = $('casePreset').selectedOptions[0]?.textContent || '';
   $('activeCaseFilter').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
   $('activeCaseFilter').classList.toggle('hidden', preset === 'all');
@@ -112,9 +147,36 @@ function caseHistoryHtml(c) {
   return logs.length ? logs.map(log => `<div class="case-history-item"><b>${esc(log.user)}</b>・${esc(new Date(log.at).toLocaleString('ja-JP'))}<br>${esc(log.detail)}</div>`).join('') : '<div class="muted">まだ変更履歴はありません。</div>';
 }
 
+function workflowTimelineHtml(c) {
+  const history = Array.isArray(c.workflowHistory) ? c.workflowHistory : [];
+  return `<div class="workflow-timeline">${WORKFLOW_STEPS.map(step => {
+    const completed = history.find(entry => entry.step === step.key);
+    return `<div class="timeline-step ${completed ? 'completed' : ''}"><span class="timeline-dot"></span><div><b>${esc(step.label)}</b><span>${completed?.completedAt ? esc(new Date(completed.completedAt).toLocaleString('ja-JP')) : '未完了'}</span>${completed?.completedBy ? `<small>${esc(completed.completedBy)}</small>` : ''}</div></div>`;
+  }).join('')}</div>`;
+}
+
+function openWorkerDetail(c) {
+  currentCaseId = c.id;
+  const workAssigned = c.workStaff === sessionUser;
+  $('detailCard').innerHTML = `
+    <section class="card worker-detail-head"><span class="event-kind ${workAssigned ? 'work' : 'survey'}">${workAssigned ? '工事' : '現調'}</span><h1>${esc(c.property)} ${esc(c.room)}</h1><span class="badge">${esc(c.status)}</span></section>
+    <section class="card worker-info"><div><span class="lab">住所</span><b>${esc(c.address || '住所未登録')}</b></div><div><span class="lab">日時</span><b>${esc(fmtDateTime(workAssigned ? c.workAt : c.surveyAt))}</b></div><div><span class="lab">現場備考</span><b>${esc(c.note || 'なし')}</b></div></section>
+    <section class="card detail-card"><h2 class="section-title">必要写真</h2><div class="worker-photo-status">${['before','during','after'].map(key => `<span class="${c.photos[key].length ? 'ok' : 'missing'}">${esc(PHOTO_GROUPS[key])} ${c.photos[key].length}枚</span>`).join('')}</div><div class="gallery worker-gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
+    ${workAssigned ? '<button id="workerCompleteButton" class="btn primary worker-complete" type="button">作業完了報告</button>' : ''}
+    <section class="card detail-card"><h2 class="section-title">工程</h2>${workflowTimelineHtml(c)}</section>`;
+  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => handleFiles(c, input.dataset.key, event.target.files)));
+  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => deletePhoto(c, button.dataset.key, Number(button.dataset.index))));
+  $('workerCompleteButton')?.addEventListener('click', () => openWorkerCompletion(c));
+  show('detail');
+}
+
 function openDetail(id) {
   const c = caseById(id);
   if (!c) return;
+  if (sessionRole === 'worker') {
+    if (!workerOwnsCase(c, sessionUser)) return notify('担当案件のみ確認できます。');
+    return openWorkerDetail(c);
+  }
   currentCaseId = id;
   const alerts = getCaseAlerts(state, c);
   $('detailCard').innerHTML = `
@@ -123,13 +185,34 @@ function openDetail(id) {
     <section class="card detail-card"><h2 class="section-title">入居者回答</h2>${answerHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">現調</h2><div class="kv"><div><div class="lab">現調担当</div><div class="val">${esc(c.surveyStaff)}</div></div><div><div class="lab">現調予定日時</div><div class="val">${esc(fmtDateTime(c.surveyAt))}</div></div></div><div class="gallery single-gallery">${photoGroupHtml(c,'survey',PHOTO_GROUPS.survey)}</div></section>
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
-    <section class="card detail-card"><h2 class="section-title">材料</h2><div class="kv"><div><div class="lab">材料納品予定日</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">次の工程</div><div class="val">${esc(nextAction(c))}</div></div></div></section>
+    <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
     <section class="card detail-card"><h2 class="section-title">工事</h2><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定日時</div><div class="val">${esc(fmtDateTime(c.workAt))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
     <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button><button id="setSurvey" class="btn">現調日を設定</button><button id="setWork" class="btn">施工日を設定</button></div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
+    <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">この案件の変更履歴</h2><div class="case-history">${caseHistoryHtml(c)}</div></section>`;
   wireDetail(c);
   show('detail');
+}
+
+function closePhotoWarning() {
+  $('photoWarningModal').classList.add('hidden');
+  pendingPhotoAction = null;
+}
+
+function requestPhotoCheckedAction(c, targetStatus, action) {
+  if (!['施工済','完了'].includes(targetStatus) || c.photos.after.length) return action();
+  pendingPhotoAction = { c, action };
+  $('photoWarningModal').classList.remove('hidden');
+}
+
+function advanceCase(c, targetStatus) {
+  const old = c.status;
+  c.status = targetStatus;
+  recordWorkflowStep(c, targetStatus, sessionUser);
+  addAudit(state, c, `ステータスを ${old} → ${c.status} に変更`);
+  persist(`「${c.status}」へ進めました。`);
+  openDetail(c.id);
 }
 
 function wireDetail(c) {
@@ -138,11 +221,8 @@ function wireDetail(c) {
   $('advance').addEventListener('click', () => {
     const index = STATUSES.indexOf(c.status);
     if (index < 0 || index >= STATUSES.length - 1) return notify('完了済みです。');
-    const old = c.status;
-    c.status = STATUSES[index + 1];
-    addAudit(state, c, `ステータスを ${old} → ${c.status} に変更`);
-    persist(`「${c.status}」へ進めました。`);
-    openDetail(c.id);
+    const targetStatus = STATUSES[index + 1];
+    requestPhotoCheckedAction(c, targetStatus, () => advanceCase(c, targetStatus));
   });
   $('editCase').addEventListener('click', () => openCaseModal(c));
   $('setSurvey').addEventListener('click', () => quickSet(c, 'survey'));
@@ -161,6 +241,7 @@ function quickSet(c, type) {
     if (STATUSES.indexOf(c.status) < STATUSES.indexOf('施工予定')) c.status = '施工予定';
   }
   auditChanges(state, before, c);
+  recordWorkflowStep(c, c.status, sessionUser);
   persist(type === 'survey' ? '現調予定を設定しました。' : '施工予定を設定しました。');
   openDetail(c.id);
 }
@@ -189,19 +270,24 @@ function compressImage(file) {
 }
 
 async function handleFiles(c, key, fileList) {
+  if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && workerOwnsCase(c, sessionUser)))) return notify('写真を追加する権限がありません。');
   const files = Array.from(fileList || []).slice(0, 6);
   if (!files.length) return;
   try {
     const images = await Promise.all(files.map(compressImage));
     c.photos[key] = [...(c.photos[key] || []), ...images].slice(0, 8);
     addAudit(state, c, `${PHOTO_GROUPS[key]}を${images.length}枚追加`);
-    if (key === 'after' && STATUSES.indexOf(c.status) < STATUSES.indexOf('写真登録')) c.status = '写真登録';
+    if (key === 'after' && STATUSES.indexOf(c.status) >= STATUSES.indexOf('施工済') && STATUSES.indexOf(c.status) < STATUSES.indexOf('写真登録')) {
+      c.status = '写真登録';
+      recordWorkflowStep(c, '写真登録', sessionUser);
+    }
     persist(`${images.length}枚の写真を追加しました。`);
     openDetail(c.id);
   } catch { notify('写真の読み込みに失敗しました。'); }
 }
 
 function deletePhoto(c, key, index) {
+  if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && workerOwnsCase(c, sessionUser)))) return notify('写真を削除する権限がありません。');
   c.photos[key].splice(index, 1);
   addAudit(state, c, `${PHOTO_GROUPS[key]}を1枚削除`);
   persist('写真を削除しました。');
@@ -209,13 +295,14 @@ function deletePhoto(c, key, index) {
 }
 
 function openCaseModal(c) {
+  if (sessionRole === 'worker' || !can(sessionRole, c ? 'edit' : 'create')) return notify('この操作を行う権限がありません。');
   $('modal').classList.remove('hidden');
   $('modalTitle').textContent = c ? '案件編集' : '新規案件登録';
   const form = $('caseForm');
   form.reset();
   form.elements.id.value = c?.id || '';
   const source = c || createCase();
-  ['property','room','address','owner','status','surveyStaff','surveyAt','estimateAmount','materialDeliveryAt','workStaff','workAt','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
+  ['property','room','address','owner','status','surveyStaff','surveyAt','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workStaff','workAt','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
   form.elements.property.focus();
 }
 
@@ -223,22 +310,67 @@ function closeCaseModal() { $('modal').classList.add('hidden'); }
 
 function saveCaseForm(event) {
   event.preventDefault();
+  if (sessionRole === 'worker' || !can(sessionRole, 'edit')) return notify('この操作を行う権限がありません。');
   const form = event.currentTarget;
   const data = new FormData(form);
   const id = data.get('id');
   const existing = id ? caseById(id) : null;
-  const before = existing ? clone(existing) : null;
   const c = existing || createCase();
-  ['property','room','address','owner','status','surveyStaff','surveyAt','materialDeliveryAt','workStaff','workAt','nextActionOverride','note'].forEach(key => c[key] = data.get(key) || '');
-  c.estimateAmount = Number(data.get('estimateAmount') || 0);
-  if (!existing) {
-    state.cases.push(c);
-    addAudit(state, c, '案件を新規登録');
-  } else auditChanges(state, before, c);
-  persist(existing ? '案件を更新しました。' : '案件を登録しました。');
-  closeCaseModal();
-  renderCases();
-  if (currentCaseId === c.id) openDetail(c.id);
+  const keys = ['property','room','address','owner','status','surveyStaff','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workStaff','workAt','nextActionOverride','note'];
+  const values = Object.fromEntries(keys.map(key => [key, data.get(key) || '']));
+  values.estimateAmount = Number(data.get('estimateAmount') || 0);
+  const commit = () => {
+    const before = existing ? clone(existing) : null;
+    Object.assign(c, values);
+    if (!existing) {
+      recordWorkflowStep(c, '問い合わせ', sessionUser);
+      state.cases.push(c);
+      addAudit(state, c, '案件を新規登録');
+    } else auditChanges(state, before, c);
+    recordWorkflowStep(c, c.status, sessionUser);
+    if (c.materialOrderedAt) recordWorkflowStep(c, '材料手配中', sessionUser, `${c.materialOrderedAt}T12:00`);
+    if (c.materialReceivedAt) recordWorkflowStep(c, '材料納品済', sessionUser, `${c.materialReceivedAt}T12:00`);
+    persist(existing ? '案件を更新しました。' : '案件を登録しました。');
+    closeCaseModal();
+    renderCases();
+    if (currentCaseId === c.id) openDetail(c.id);
+  };
+  existing?.status === values.status ? commit() : requestPhotoCheckedAction(c, values.status, commit);
+}
+
+function openWorkerCompletion(c) {
+  if (!can(sessionRole, 'completeOwn') || c.workStaff !== sessionUser) return notify('完了報告できるのは施工担当案件のみです。');
+  const form = $('workerCompleteForm');
+  form.reset();
+  form.elements.caseId.value = c.id;
+  $('workerCompletePhoto').innerHTML = c.photos.after.length
+    ? `<span class="completion-ok">施工後写真 ${c.photos.after.length}枚を確認</span>`
+    : '<span class="completion-warning">施工後写真が未登録です。写真追加を推奨します。</span>';
+  $('workerCompleteModal').classList.remove('hidden');
+}
+
+function closeWorkerCompletion() { $('workerCompleteModal').classList.add('hidden'); }
+
+function completeWorkerCase(c, note) {
+  const old = c.status;
+  if (STATUSES.indexOf(c.status) < STATUSES.indexOf('施工済')) c.status = '施工済';
+  recordWorkflowStep(c, '施工済', sessionUser);
+  if (c.photos.after.length) recordWorkflowStep(c, '写真登録', sessionUser);
+  if (note) c.note = [c.note, `完了報告：${note}`].filter(Boolean).join('／');
+  addAudit(state, c, `作業完了を報告${old !== c.status ? `（ステータス ${old} → ${c.status}）` : ''}`);
+  persist('作業完了を報告しました。');
+  closeWorkerCompletion();
+  openDetail(c.id);
+}
+
+function saveWorkerCompletion(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const c = caseById(form.elements.caseId.value);
+  if (!c || !form.elements.confirmed.checked) return;
+  const note = form.elements.completionNote.value.trim();
+  closeWorkerCompletion();
+  requestPhotoCheckedAction(c, '施工済', () => completeWorkerCase(c, note));
 }
 
 function monthDays() {
@@ -396,6 +528,15 @@ function setFormError(id, message) {
   node.classList.toggle('hidden', !message);
 }
 
+function updateRoleUi(role) {
+  const worker = role === 'worker';
+  $('appRoot').classList.toggle('worker-mode', worker);
+  document.querySelectorAll('.tab').forEach(button => button.classList.toggle('role-hidden', worker && button.dataset.view !== 'home'));
+  $('back').textContent = worker ? '← 今日の現場' : '← 案件一覧';
+  $('newCase').classList.toggle('role-hidden', worker);
+  $('resetDemo').classList.toggle('role-hidden', worker);
+}
+
 function activateSession(session) {
   if (!session || !USERS.includes(session.user)) return showLogin();
   sessionUser = session.user;
@@ -404,6 +545,7 @@ function activateSession(session) {
   saveState(state);
   $('loggedInUser').textContent = session.user;
   $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
+  updateRoleUi(session.role);
   $('loginView').classList.add('hidden');
   $('appRoot').classList.remove('hidden');
   show('home');
@@ -464,6 +606,7 @@ function closeUserAdmin() { $('userAdminModal').classList.add('hidden'); }
 
 async function init() {
   await ensureCredentials();
+  ensurePhase2Ui();
   populateSelect($('loginUser'), USERS);
   populateSelect($('statusSelect'), STATUSES);
   populateSelect($('surveyStaffSelect'), SURVEY_STAFF);
@@ -479,6 +622,22 @@ async function init() {
   $('userAdminButton').addEventListener('click', openUserAdmin);
   $('closeUserAdminModal').addEventListener('click', closeUserAdmin);
   $('userAdminModal').addEventListener('click', event => { if (event.target === $('userAdminModal')) closeUserAdmin(); });
+  $('photoWarningAdd').addEventListener('click', () => {
+    const c = pendingPhotoAction?.c;
+    closePhotoWarning();
+    if (!c) return;
+    closeCaseModal();
+    openDetail(c.id);
+    setTimeout(() => document.querySelector('.photoInput[data-key="after"]')?.closest('.photoGroup')?.scrollIntoView({ behavior:'smooth', block:'center' }), 50);
+  });
+  $('photoWarningProceed').addEventListener('click', () => {
+    const action = pendingPhotoAction?.action;
+    closePhotoWarning();
+    action?.();
+  });
+  $('photoWarningCancel').addEventListener('click', closePhotoWarning);
+  $('closeWorkerComplete').addEventListener('click', closeWorkerCompletion);
+  $('workerCompleteForm').addEventListener('submit', saveWorkerCompletion);
   document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => show(button.dataset.view)));
   document.querySelectorAll('[data-response-mode]').forEach(button => button.addEventListener('click', () => setResponseMode(button.dataset.responseMode)));
   $('search').addEventListener('input', renderCases);

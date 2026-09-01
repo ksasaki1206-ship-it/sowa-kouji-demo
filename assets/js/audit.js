@@ -1,6 +1,6 @@
 const LABELS = {
   property:'物件名', room:'部屋番号', address:'住所', owner:'管理会社 / オーナー', status:'ステータス',
-  surveyStaff:'現調担当', surveyAt:'現調日', estimateAmount:'見積金額', materialDeliveryAt:'材料納品日',
+  surveyStaff:'現調担当', surveyAt:'現調日', estimateAmount:'見積金額', materialOrderedAt:'材料発注日', materialDeliveryAt:'材料納品予定日', materialReceivedAt:'材料納品確認日', supplier:'仕入先', materialNote:'材料メモ',
   workStaff:'工事担当', workAt:'工事日', nextActionOverride:'次のアクション', note:'備考'
 };
 
