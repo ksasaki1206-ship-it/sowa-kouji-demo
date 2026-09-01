@@ -1,5 +1,5 @@
-import { DEFAULT_DURATIONS, STATUSES } from './data.js?v=20260901-16';
-import { auditRepository, caseRepository, responseRepository, workflowRepository } from './repositories.js?v=20260901-16';
+import { DEFAULT_DURATIONS, STATUSES } from './data.js?v=20260901-17';
+import { auditRepository, caseRepository, responseRepository, workflowRepository } from './repositories.js?v=20260901-17';
 
 const indexOfStatus = status => Math.max(0, STATUSES.indexOf(status));
 const dateOnly = value => value ? value.slice(0, 10) : '';
@@ -62,6 +62,16 @@ export function findScheduleConflicts(state, candidateItem, excludeCaseId = cand
     }
   }
   return conflicts;
+}
+
+export function findDuplicateCases(state, candidateItem, excludeCaseId = candidateItem.id) {
+  const propertyId = String(candidateItem?.propertyId || '');
+  const room = String(candidateItem?.room || '').trim();
+  if (!propertyId || !room) return [];
+  return caseRepository.list(state).filter(item => item.id !== excludeCaseId
+    && item.propertyId === propertyId
+    && String(item.room || '').trim() === room
+    && item.status !== '完了');
 }
 
 export function responseForCase(state, item) {

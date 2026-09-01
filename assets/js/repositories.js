@@ -1,5 +1,5 @@
-import { PHOTO_GROUPS } from './data.js?v=20260901-16';
-import { USER_DEFINITIONS } from './auth.js?v=20260901-16';
+import { PHOTO_GROUPS, normalizePropertyName } from './data.js?v=20260901-17';
+import { USER_DEFINITIONS } from './auth.js?v=20260901-17';
 
 const array = (state, key) => Array.isArray(state?.[key]) ? state[key] : [];
 const matchId = (item, id) => item?.id === id;
@@ -134,6 +134,30 @@ export const staffRepository = Object.freeze({
   }
 });
 
+export const propertyRepository = Object.freeze({
+  list(state) {
+    return array(state, 'properties');
+  },
+  get(state, id) {
+    return this.list(state).find(item => matchId(item, id)) || null;
+  },
+  getByName(state, name) {
+    const normalized = normalizePropertyName(name);
+    return this.list(state).find(item => normalizePropertyName(item.name) === normalized) || null;
+  },
+  create(state, item) {
+    if (!item?.id || !normalizePropertyName(item.name) || this.get(state, item.id) || this.getByName(state, item.name)) return null;
+    this.list(state).push(item);
+    return item;
+  },
+  update(state, id, changes) {
+    const item = this.get(state, id);
+    if (!item) return null;
+    Object.assign(item, changes);
+    return item;
+  }
+});
+
 function ensurePhotoCollections(item) {
   item.photos = item.photos && typeof item.photos === 'object' ? item.photos : {};
   item.photoMetadata = item.photoMetadata && typeof item.photoMetadata === 'object' ? item.photoMetadata : {};
@@ -209,5 +233,6 @@ export const repositories = Object.freeze({
   workflows:workflowRepository,
   users:userRepository,
   staff:staffRepository,
+  properties:propertyRepository,
   photos:photoRepository
 });

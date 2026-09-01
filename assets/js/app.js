@@ -1,8 +1,8 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js?v=20260901-16';
-import { dataAccess } from './data-access.js?v=20260901-16';
-import { addAudit, auditChanges } from './audit.js?v=20260901-16';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-16';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-16';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, normalizePropertyName, clone, todayKey, plusDays } from './data.js?v=20260901-17';
+import { dataAccess } from './data-access.js?v=20260901-17';
+import { addAudit, auditChanges } from './audit.js?v=20260901-17';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-17';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-17';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;
@@ -13,13 +13,16 @@ let sessionRole = '';
 let scheduleMode = 'property';
 let pendingPhotoAction = null;
 let pendingConflictAction = null;
+let pendingDuplicateAction = null;
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
 const fmtDate = value => value ? value.replaceAll('-', '/') : '未定';
 const fmtMoney = value => Number(value || 0).toLocaleString('ja-JP') + '円';
 const datePart = value => value ? value.slice(0, 10) : '';
-const properties = () => [...new Set(dataAccess.cases.list().map(c => c.property).filter(Boolean))].sort();
+const propertyList = () => dataAccess.properties.list();
+const propertyById = id => id ? dataAccess.properties.get(id) : null;
+const properties = () => propertyList().map(item => item.name).filter(Boolean).sort((a,b) => a.localeCompare(b, 'ja'));
 const caseById = id => dataAccess.cases.get(id);
 const responseForCase = c => workflowResponseForCase(state, c);
 const staffList = () => dataAccess.staff.list();
@@ -40,6 +43,37 @@ function populateAssignmentSelect(select, capability, selectedId = '', selectedN
   else if (selectedName && selectedName !== '未定') {
     const legacy = staffList().find(person => person.name === selectedName);
     if (legacy && [...select.options].some(option => option.value === legacy.id)) select.value = legacy.id;
+  }
+}
+
+function propertyOwnerSummary(property) {
+  return [property?.managementCompany, property?.ownerName].filter(Boolean).join(' ／ ');
+}
+
+function propertyReferenceHtml(property) {
+  if (!property) return '<span class="muted">物件情報を選択してください。</span>';
+  return `<div><span>住所</span><b>${esc(property.address || '未登録')}</b></div><div><span>管理会社／オーナー</span><b>${esc(propertyOwnerSummary(property) || '未登録')}</b></div><div><span>駐車情報</span><b>${esc(property.parkingInfo || '未登録')}</b></div><div><span>アクセス情報</span><b>${esc(property.accessInfo || '未登録')}</b></div>${property.commonNote ? `<div class="property-note"><span>共通備考</span><b>${esc(property.commonNote)}</b></div>` : ''}`;
+}
+
+function populateCasePropertySelect(source) {
+  const select = $('caseForm').elements.propertyId;
+  const selected = propertyById(source.propertyId) || dataAccess.properties.getByName(source.property);
+  const candidates = propertyList().filter(item => item.active);
+  if (selected && !candidates.some(item => item.id === selected.id)) candidates.push(selected);
+  candidates.sort((a,b) => a.name.localeCompare(b.name, 'ja'));
+  select.innerHTML = candidates.map(item => `<option value="${esc(item.id)}">${esc(item.name)}${item.active ? '' : '（無効・既存）'}</option>`).join('');
+  if (selected && [...select.options].some(option => option.value === selected.id)) select.value = selected.id;
+  updateCasePropertyInfo(!source.id);
+}
+
+function updateCasePropertyInfo(fillLegacy = false) {
+  const form = $('caseForm');
+  const property = propertyById(form.elements.propertyId.value);
+  form.elements.property.value = property?.name || '';
+  $('casePropertyInfo').innerHTML = propertyReferenceHtml(property);
+  if (fillLegacy && property) {
+    form.elements.address.value = property.address || '';
+    form.elements.owner.value = propertyOwnerSummary(property);
   }
 }
 
@@ -81,6 +115,11 @@ function ensurePhase2Ui() {
     ['material-unordered','材料未発注'], ['material-overdue','納品遅延'], ['after-photo-missing','施工後写真不足']
   ].forEach(([value, label]) => $('casePreset').add(new Option(label, value)));
   document.body.insertAdjacentHTML('beforeend', '<div id="photoWarningModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photoWarningTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="photoWarningTitle" class="big">施工後写真が未登録です</div></div><p>施工後写真が登録されていません。このまま工程を進めますか？</p><div class="warning-actions"><button id="photoWarningAdd" class="btn primary" type="button">写真を追加する</button><button id="photoWarningProceed" class="btn danger" type="button">このまま進める</button><button id="photoWarningCancel" class="btn" type="button">キャンセル</button></div></div></div><div id="workerCompleteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="workerCompleteTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="workerCompleteTitle" class="big">作業完了報告</div><button id="closeWorkerComplete" class="btn" type="button">閉じる</button></div><form id="workerCompleteForm" class="form"><input type="hidden" name="caseId"><div id="workerCompletePhoto" class="completion-photo"></div><label><span>完了報告・現場備考</span><textarea class="textarea" name="completionNote" placeholder="作業内容や申し送り"></textarea></label><label class="confirm-check"><input type="checkbox" name="confirmed" required><span>作業内容と写真を確認しました</span></label><button class="btn primary full" type="submit">完了を報告する</button></form></div></div>');
+  $('staffAdminButton').insertAdjacentHTML('afterend', '<button id="propertyButton" class="btn logout hidden" type="button">物件情報</button>');
+  const propertyLabel = $('caseForm').elements.property.closest('label');
+  propertyLabel.innerHTML = '<span>物件</span><select class="select" name="propertyId" required></select><input type="hidden" name="property">';
+  propertyLabel.closest('.two').insertAdjacentHTML('afterend', '<div id="casePropertyInfo" class="property-reference"></div><button id="newPropertyFromCase" class="btn property-create-link hidden" type="button">＋ 新しい物件を登録</button>');
+  document.body.insertAdjacentHTML('beforeend', `<div id="propertyAdminModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="propertyAdminTitle"><div class="modalbox property-admin-modal"><div class="modalhead"><div id="propertyAdminTitle" class="big">物件情報</div><button id="closePropertyAdmin" class="btn" type="button">閉じる</button></div><p class="muted">物件共通情報と、この物件に紐づく案件を確認できます。</p><section id="propertyFormSection"><form id="propertyForm" class="form property-form"><input type="hidden" name="id"><div class="two"><label><span>物件名</span><input class="input" name="name" required></label><label><span>住所</span><input class="input" name="address"></label></div><div class="two"><label><span>管理会社</span><input class="input" name="managementCompany"></label><label><span>オーナー名</span><input class="input" name="ownerName"></label></div><div class="two"><label><span>駐車情報</span><input class="input" name="parkingInfo"></label><label><span>入館／鍵／アクセス情報</span><input class="input" name="accessInfo"></label></div><label><span>物件共通備考</span><textarea class="textarea" name="commonNote"></textarea></label><label class="confirm-check"><input type="checkbox" name="active" checked><span>有効な物件として使用する</span></label><div class="actions"><button class="btn primary" type="submit">物件を保存</button><button id="clearPropertyForm" class="btn" type="button">新規入力に戻す</button></div><div id="propertyFormError" class="form-error hidden" role="alert"></div></form></section><div id="propertyAdminList" class="property-admin-list"></div></div></div><div id="propertyDetailModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="propertyDetailTitle"><div class="modalbox property-detail-modal"><div class="modalhead"><div id="propertyDetailTitle" class="big">物件詳細</div><button id="closePropertyDetail" class="btn" type="button">閉じる</button></div><div id="propertyDetailContent"></div></div></div><div id="duplicateCaseModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="duplicateCaseTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="duplicateCaseTitle" class="big">⚠ この部屋には進行中の案件があります</div></div><div id="duplicateCaseDetails" class="conflict-details"></div><p>このまま新しい案件を登録しますか？</p><div class="warning-actions"><button id="duplicateCaseReview" class="btn primary" type="button">既存案件を確認</button><button id="duplicateCaseProceed" class="btn danger" type="button">このまま登録</button><button id="duplicateCaseCancel" class="btn" type="button">キャンセル</button></div></div></div>`);
 }
 
 function show(view) {
@@ -221,7 +260,7 @@ function openDetail(id) {
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
     <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
     <section class="card detail-card"><h2 class="section-title">工事</h2><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定時間</div><div class="val">${esc(formatPlan(c.workAt, c.workDurationMinutes))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
-    <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button></div>
+    <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button>${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}</div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
     <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">この案件の変更履歴</h2><div class="case-history">${caseHistoryHtml(c)}</div></section>`;
@@ -259,6 +298,7 @@ function wireDetail(c) {
     requestPhotoCheckedAction(c, targetStatus, () => advanceCase(c, targetStatus));
   });
   $('editCase').addEventListener('click', () => openCaseModal(c));
+  $('viewCaseProperty')?.addEventListener('click', () => openPropertyDetail(c.propertyId));
 }
 
 function compressImage(file) {
@@ -319,10 +359,12 @@ function openCaseModal(c) {
   form.elements.id.value = c?.id || '';
   const source = c || createCase();
   ['property','room','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
+  populateCasePropertySelect(source);
   populateAssignmentSelect(form.elements.surveyStaffId, 'canSurvey', source.surveyStaffId, source.surveyStaff);
   populateAssignmentSelect(form.elements.workStaffId, 'canWork', source.workStaffId, source.workStaff);
+  $('newPropertyFromCase').classList.toggle('hidden', !can(sessionRole, 'manageProperties'));
   updateEndPreviews();
-  form.elements.property.focus();
+  form.elements.propertyId.focus();
 }
 
 function closeCaseModal() { $('modal').classList.add('hidden'); }
@@ -335,8 +377,12 @@ function saveCaseForm(event) {
   const id = data.get('id');
   const existing = id ? caseById(id) : null;
   const c = existing || createCase();
+  const selectedProperty = propertyById(data.get('propertyId'));
+  if (!selectedProperty) return notify('物件を選択してください。');
   const keys = ['property','room','address','owner','status','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','nextActionOverride','note'];
   const values = Object.fromEntries(keys.map(key => [key, data.get(key) || '']));
+  values.propertyId = selectedProperty.id;
+  values.property = selectedProperty.name;
   values.estimateAmount = Number(data.get('estimateAmount') || 0);
   values.surveyDurationMinutes = Math.max(15, Number(data.get('surveyDurationMinutes') || DEFAULT_DURATIONS.survey));
   values.workDurationMinutes = Math.max(15, Number(data.get('workDurationMinutes') || DEFAULT_DURATIONS.work));
@@ -345,7 +391,7 @@ function saveCaseForm(event) {
   values.surveyStaff = staffById(values.surveyStaffId)?.name || '未定';
   values.workStaff = staffById(values.workStaffId)?.name || '未定';
   const proposal = { ...c, ...values };
-  const commit = (ignoredConflicts = []) => {
+  const commit = (ignoredConflicts = [], ignoredDuplicate = false) => {
     const before = existing ? clone(existing) : null;
     Object.assign(c, values);
     if (!existing) {
@@ -360,6 +406,7 @@ function saveCaseForm(event) {
       const labels = [...new Set(ignoredConflicts.map(conflict => conflict.candidate.label))].join('・');
       addAudit(state, c, `重複警告を確認した上で${labels}予定を登録`);
     }
+    if (ignoredDuplicate) addAudit(state, c, '重複案件警告を確認した上で登録');
     recordWorkflowStep(c, c.status, sessionUser);
     if (c.materialOrderedAt) recordWorkflowStep(c, '材料手配中', sessionUser, `${c.materialOrderedAt}T12:00`);
     if (c.materialReceivedAt) recordWorkflowStep(c, '材料納品済', sessionUser, `${c.materialReceivedAt}T12:00`);
@@ -368,10 +415,34 @@ function saveCaseForm(event) {
     renderCases();
     if (currentCaseId === c.id) openDetail(c.id);
   };
-  const proceed = ignoredConflicts => existing?.status === values.status ? commit(ignoredConflicts) : requestPhotoCheckedAction(c, values.status, () => commit(ignoredConflicts));
-  const conflicts = findScheduleConflicts(state, proposal, existing?.id || proposal.id);
-  if (conflicts.length) return openConflictWarning(conflicts, () => proceed(conflicts));
-  proceed([]);
+  const proceed = (ignoredConflicts, ignoredDuplicate) => existing?.status === values.status ? commit(ignoredConflicts, ignoredDuplicate) : requestPhotoCheckedAction(c, values.status, () => commit(ignoredConflicts, ignoredDuplicate));
+  const checkSchedule = ignoredDuplicate => {
+    const conflicts = findScheduleConflicts(state, proposal, existing?.id || proposal.id);
+    if (conflicts.length) return openConflictWarning(conflicts, () => proceed(conflicts, ignoredDuplicate));
+    proceed([], ignoredDuplicate);
+  };
+  const duplicates = existing ? [] : findDuplicateCases(state, proposal);
+  if (duplicates.length) return openDuplicateWarning(duplicates, () => checkSchedule(true));
+  checkSchedule(false);
+}
+
+function closeDuplicateWarning() {
+  $('duplicateCaseModal').classList.add('hidden');
+  pendingDuplicateAction = null;
+}
+
+function openDuplicateWarning(duplicates, proceed) {
+  pendingDuplicateAction = { duplicates, proceed };
+  $('duplicateCaseDetails').innerHTML = duplicates.map(item => `<article class="conflict-item"><b>${esc(item.property)} ${esc(item.room)}</b><div>現在ステータス：${esc(item.status)}</div><small>案件ID：${esc(item.id)}</small></article>`).join('');
+  $('duplicateCaseModal').classList.remove('hidden');
+}
+
+function reviewDuplicateCase() {
+  const item = pendingDuplicateAction?.duplicates[0];
+  closeDuplicateWarning();
+  if (!item) return;
+  closeCaseModal();
+  openDetail(item.id);
 }
 
 function closeConflictWarning() {
@@ -459,12 +530,13 @@ function alignScheduleToToday(scroll) {
 
 function renderSchedule() {
   const select = $('scheduleProperty');
-  const props = properties();
+  const props = propertyList().slice().sort((a,b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'ja'));
   const previous = select.value || 'all';
-  populateSelect(select, props, '全物件');
-  select.value = previous === 'all' || props.includes(previous) ? previous : 'all';
-  const selectedProperties = select.value === 'all' ? props : [select.value];
-  const cases = dataAccess.cases.list().filter(c => selectedProperties.includes(c.property));
+  select.innerHTML = '<option value="all">全物件</option>' + props.map(property => `<option value="${esc(property.id)}">${esc(property.name)}${property.active ? '' : '（無効）'}</option>`).join('');
+  select.value = previous === 'all' || props.some(property => property.id === previous) ? previous : 'all';
+  const selectedProperties = select.value === 'all' ? props : props.filter(property => property.id === select.value);
+  const selectedIds = new Set(selectedProperties.map(property => property.id));
+  const cases = dataAccess.cases.list().filter(c => selectedIds.has(c.propertyId));
   $('scheduleSummary').innerHTML = [
     ['回答待ち', cases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length],
     ['現調未確定', cases.filter(c => !c.surveyAt).length],
@@ -473,13 +545,14 @@ function renderSchedule() {
   const days = monthDays();
   const mobile = window.matchMedia('(max-width: 700px)').matches;
   $('scheduleWrap').innerHTML = selectedProperties.map((property, index) => {
-    const propertyCases = cases.filter(c => c.property === property).sort((a,b) => a.room.localeCompare(b.room, 'ja', {numeric:true}));
+    const propertyCases = cases.filter(c => c.propertyId === property.id).sort((a,b) => a.room.localeCompare(b.room, 'ja', {numeric:true}));
     const waiting = propertyCases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length;
     const undecided = propertyCases.filter(c => !c.surveyAt || !c.workAt).length;
     const open = !mobile || select.value !== 'all' || index === 0;
-    return `<details class="schedule-group" ${open ? 'open' : ''}><summary><span><b>${esc(property)}</b><span class="muted">${propertyCases.length}室</span></span><span class="group-status">${waiting ? `<span class="badge wait">回答待ち ${waiting}</span>` : ''}${undecided ? `<span class="badge">未確定 ${undecided}</span>` : ''}<span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="schedule-scroll">${propertyCases.length ? scheduleTable(propertyCases, days) : '<div class="empty">案件はありません。</div>'}</div></details>`;
+    return `<details class="schedule-group" ${open ? 'open' : ''}><summary><span><b>${esc(property.name)}</b><span class="muted">${propertyCases.length}案件${property.active ? '' : ' ／ 無効'}</span></span><span class="group-status">${waiting ? `<span class="badge wait">回答待ち ${waiting}</span>` : ''}${undecided ? `<span class="badge">未確定 ${undecided}</span>` : ''}<span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="property-group-toolbar"><button class="btn open-property" type="button" data-id="${esc(property.id)}">物件情報</button></div><div class="schedule-scroll">${propertyCases.length ? scheduleTable(propertyCases, days) : '<div class="empty">案件はありません。</div>'}</div></details>`;
   }).join('') || '<div class="card empty">表示できる物件がありません。</div>';
   wireCaseLinks($('scheduleWrap'));
+  $('scheduleWrap').querySelectorAll('.open-property').forEach(button => button.addEventListener('click', () => openPropertyDetail(button.dataset.id)));
   $('scheduleWrap').querySelectorAll('.schedule-group').forEach(group => {
     const scroll = group.querySelector('.schedule-scroll');
     if (group.open) alignScheduleToToday(scroll);
@@ -625,6 +698,8 @@ function activateSession(session) {
   $('loggedInUser').textContent = session.user;
   $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
   $('staffAdminButton').classList.toggle('hidden', !can(session.role, 'manageStaff'));
+  $('propertyButton').classList.toggle('hidden', session.role === 'worker');
+  $('propertyButton').textContent = can(session.role, 'manageProperties') ? '物件管理' : '物件情報';
   updateRoleUi(session.role);
   $('loginView').classList.add('hidden');
   $('appRoot').classList.remove('hidden');
@@ -780,6 +855,110 @@ function openStaffAdmin() {
 
 function closeStaffAdmin() { $('staffAdminModal').classList.add('hidden'); }
 
+const PROPERTY_FIELD_LABELS = Object.freeze({ name:'物件名', address:'住所', managementCompany:'管理会社', ownerName:'オーナー名', parkingInfo:'駐車情報', accessInfo:'アクセス情報', commonNote:'共通備考' });
+
+function resetPropertyForm() {
+  const form = $('propertyForm');
+  form.reset();
+  form.elements.id.value = '';
+  form.elements.active.checked = true;
+  setFormError('propertyFormError', '');
+}
+
+function renderPropertyAdmin() {
+  const editable = can(sessionRole, 'manageProperties');
+  $('propertyFormSection').classList.toggle('hidden', !editable);
+  $('propertyAdminTitle').textContent = editable ? '物件管理' : '物件情報';
+  const counts = new Map(propertyList().map(property => [property.id, dataAccess.cases.list().filter(item => item.propertyId === property.id).length]));
+  $('propertyAdminList').innerHTML = propertyList().slice().sort((a,b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'ja')).map(property => `<article class="property-admin-row ${property.active ? '' : 'inactive'}"><button class="property-summary open-property" type="button" data-id="${esc(property.id)}"><span><b>${esc(property.name)}</b>${property.active ? '' : '<span class="badge inactive-badge">無効</span>'}</span><small>${esc(property.address || '住所未登録')} ／ 案件 ${counts.get(property.id) || 0}件</small></button>${editable ? `<div class="actions"><button class="btn edit-property" type="button" data-id="${esc(property.id)}">編集</button><button class="btn toggle-property ${property.active ? 'danger' : ''}" type="button" data-id="${esc(property.id)}">${property.active ? '無効化' : '有効化'}</button></div>` : ''}</article>`).join('') || '<div class="card empty">物件情報がありません。</div>';
+  $('propertyAdminList').querySelectorAll('.open-property').forEach(button => button.addEventListener('click', () => openPropertyDetail(button.dataset.id)));
+  $('propertyAdminList').querySelectorAll('.edit-property').forEach(button => button.addEventListener('click', () => {
+    const property = propertyById(button.dataset.id);
+    if (!property) return;
+    const form = $('propertyForm');
+    Object.keys(PROPERTY_FIELD_LABELS).forEach(key => form.elements[key].value = property[key] || '');
+    form.elements.id.value = property.id;
+    form.elements.active.checked = property.active;
+    form.elements.name.focus();
+  }));
+  $('propertyAdminList').querySelectorAll('.toggle-property').forEach(button => button.addEventListener('click', () => {
+    if (!can(sessionRole, 'manageProperties')) return;
+    const property = propertyById(button.dataset.id);
+    if (!property || !confirm(`${property.name}を${property.active ? '無効化' : '有効化'}しますか？`)) return;
+    const active = !property.active;
+    dataAccess.properties.update(property.id, { active, updatedAt:new Date().toISOString() });
+    addAudit(state, { property:property.name }, `物件「${property.name}」を${active ? '有効化' : '無効化'}`);
+    persist(`物件を${active ? '有効化' : '無効化'}しました。`);
+    resetPropertyForm();
+    renderPropertyAdmin();
+  }));
+}
+
+function saveProperty(event) {
+  event.preventDefault();
+  if (!can(sessionRole, 'manageProperties')) return notify('この操作を行う権限がありません。');
+  const form = event.currentTarget;
+  const id = form.elements.id.value;
+  const existing = id ? propertyById(id) : null;
+  const values = Object.fromEntries(Object.keys(PROPERTY_FIELD_LABELS).map(key => [key, key === 'name' ? normalizePropertyName(form.elements[key].value) : form.elements[key].value.trim()]));
+  values.active = form.elements.active.checked;
+  if (!values.name) return setFormError('propertyFormError', '物件名を入力してください。');
+  const duplicate = propertyList().find(property => property.id !== id && normalizePropertyName(property.name) === values.name);
+  if (duplicate) return setFormError('propertyFormError', '同じ物件名が存在します。');
+  setFormError('propertyFormError', '');
+  const now = new Date().toISOString();
+  if (existing) {
+    const before = clone(existing);
+    dataAccess.properties.update(existing.id, { ...values, updatedAt:now });
+    if (before.name !== values.name) {
+      const linkedCaseIds = new Set();
+      dataAccess.cases.list().forEach(item => {
+        if (item.propertyId !== existing.id) return;
+        dataAccess.cases.update(item.id, { property:values.name });
+        linkedCaseIds.add(item.id);
+      });
+      dataAccess.responses.list().forEach(response => { if (linkedCaseIds.has(response.caseId)) dataAccess.responses.update(response.id, { property:values.name }); });
+    }
+    const changes = Object.keys(PROPERTY_FIELD_LABELS).filter(key => String(before[key] || '') !== String(values[key] || '')).map(key => `${PROPERTY_FIELD_LABELS[key]}を変更`);
+    addAudit(state, { property:values.name }, `物件「${values.name}」を編集${changes.length ? `（${changes.join('、')}）` : ''}`);
+    if (before.active !== values.active) addAudit(state, { property:values.name }, `物件「${values.name}」を${values.active ? '有効化' : '無効化'}`);
+  } else {
+    const property = { ...createProperty(), ...values, createdAt:now, updatedAt:now };
+    if (!dataAccess.properties.create(property)) return setFormError('propertyFormError', '物件を追加できませんでした。');
+    addAudit(state, { property:property.name }, `物件「${property.name}」を追加`);
+  }
+  persist(existing ? '物件を更新しました。' : '物件を追加しました。');
+  resetPropertyForm();
+  renderPropertyAdmin();
+  renderSchedule();
+}
+
+function openPropertyAdmin() {
+  if (sessionRole === 'worker') return;
+  resetPropertyForm();
+  renderPropertyAdmin();
+  $('propertyAdminModal').classList.remove('hidden');
+}
+
+function closePropertyAdmin() { $('propertyAdminModal').classList.add('hidden'); }
+
+function openPropertyDetail(id) {
+  const property = propertyById(id);
+  if (!property || sessionRole === 'worker') return;
+  const cases = dataAccess.cases.list().filter(item => item.propertyId === property.id).sort((a,b) => a.room.localeCompare(b.room, 'ja', { numeric:true }));
+  const roomGroups = [...new Set(cases.map(item => item.room))];
+  $('propertyDetailTitle').textContent = property.name;
+  $('propertyDetailContent').innerHTML = `<section class="property-detail-grid">${propertyReferenceHtml(property)}</section><section class="property-cases"><h2>この物件の案件</h2>${roomGroups.map(room => `<div class="property-room"><b>${esc(room || '部屋未登録')}</b>${cases.filter(item => item.room === room).map(item => `<button class="property-case-link" type="button" data-id="${esc(item.id)}"><span>${esc(item.status)}</span><small>${esc(item.residentName || '入居者未登録')} ／ 次：${esc(nextAction(item))}</small><b>›</b></button>`).join('')}</div>`).join('') || '<div class="empty">この物件の案件はありません。</div>'}</section>`;
+  $('propertyDetailContent').querySelectorAll('.property-case-link').forEach(button => button.addEventListener('click', () => {
+    $('propertyDetailModal').classList.add('hidden');
+    closePropertyAdmin();
+    openDetail(button.dataset.id);
+  }));
+  $('propertyDetailModal').classList.remove('hidden');
+}
+
+function closePropertyDetail() { $('propertyDetailModal').classList.add('hidden'); }
+
 async function init() {
   await ensureCredentials();
   ensurePhase2Ui();
@@ -801,6 +980,23 @@ async function init() {
   $('staffAdminModal').addEventListener('click', event => { if (event.target === $('staffAdminModal')) closeStaffAdmin(); });
   $('staffForm').addEventListener('submit', saveStaff);
   $('clearStaffForm').addEventListener('click', resetStaffForm);
+  $('propertyButton').addEventListener('click', openPropertyAdmin);
+  $('closePropertyAdmin').addEventListener('click', closePropertyAdmin);
+  $('propertyAdminModal').addEventListener('click', event => { if (event.target === $('propertyAdminModal')) closePropertyAdmin(); });
+  $('propertyForm').addEventListener('submit', saveProperty);
+  $('clearPropertyForm').addEventListener('click', resetPropertyForm);
+  $('closePropertyDetail').addEventListener('click', closePropertyDetail);
+  $('propertyDetailModal').addEventListener('click', event => { if (event.target === $('propertyDetailModal')) closePropertyDetail(); });
+  $('caseForm').elements.propertyId.addEventListener('change', () => updateCasePropertyInfo(true));
+  $('newPropertyFromCase').addEventListener('click', () => { closeCaseModal(); openPropertyAdmin(); });
+  $('duplicateCaseReview').addEventListener('click', reviewDuplicateCase);
+  $('duplicateCaseProceed').addEventListener('click', () => {
+    const proceed = pendingDuplicateAction?.proceed;
+    closeDuplicateWarning();
+    proceed?.();
+  });
+  $('duplicateCaseCancel').addEventListener('click', closeDuplicateWarning);
+  $('duplicateCaseModal').addEventListener('click', event => { if (event.target === $('duplicateCaseModal')) closeDuplicateWarning(); });
   ['surveyAt','surveyDurationMinutes','workAt','workDurationMinutes'].forEach(name => $('caseForm').elements[name].addEventListener('input', updateEndPreviews));
   $('conflictReview').addEventListener('click', reviewConflictSchedule);
   $('conflictProceed').addEventListener('click', () => {

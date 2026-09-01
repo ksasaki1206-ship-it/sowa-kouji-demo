@@ -1,5 +1,5 @@
-import { loadState, saveState, resetState } from './storage.js?v=20260901-16';
-import { repositories } from './repositories.js?v=20260901-16';
+import { loadState, saveState, resetState } from './storage.js?v=20260901-17';
+import { repositories } from './repositories.js?v=20260901-17';
 
 const bindRepository = (repository, getState) => Object.freeze(Object.fromEntries(
   Object.keys(repository).map(method => [method, (...args) => repository[method](getState(), ...args)])
@@ -33,6 +33,7 @@ export function createLocalDataAccess() {
     workflows:bindRepository(repositories.workflows, current),
     users:bindRepository(repositories.users, current),
     staff:bindRepository(repositories.staff, current),
+    properties:bindRepository(repositories.properties, current),
     photos:bindRepository(repositories.photos, current)
   });
 }

@@ -21,12 +21,19 @@ const legacy = migrateState({
   responses:[{ id:'legacy-response', caseId:'legacy-1', property:'既存物件', room:'101号室', name:'既存入居者', receivedAt:'2026-08-01T10:00:00.000Z' }],
   cases:[{
     id:'legacy-1', property:'既存物件', room:'101号室', status:'問い合わせ',
+    address:'既存住所A', owner:'既存管理A',
     surveyStaff:'既存職人', surveyAt:'2026-09-02T10:00', workStaff:'既存職人', workAt:'2026-09-03T13:00',
     workflowHistory:[{ step:'inquiry', completedAt:'2026-08-01T08:00:00.000Z', completedBy:'事務所' }],
     photos:{ survey:['data:image/png;base64,AAAA'] }
+  },{
+    id:'legacy-2', property:' 既存物件　 ', room:'102号室', status:'完了', address:'既存住所B', owner:'既存管理B'
+  },{
+    id:'legacy-3', property:'〇〇物件', room:'101号室', status:'問い合わせ'
   }]
 });
 const legacyCase = legacy.cases.find(item => item.id === 'legacy-1');
+const samePropertyCase = legacy.cases.find(item => item.id === 'legacy-2');
+const differentPropertyCase = legacy.cases.find(item => item.id === 'legacy-3');
 assert.equal(legacyCase.photos.survey.length, 1);
 assert.equal(legacyCase.photoMetadata.survey.length, 1);
 assert.equal(legacyCase.photoMetadata.survey[0].storageProvider, 'localStorage');
@@ -40,6 +47,14 @@ assert.equal(legacyCase.surveyStaffId, legacyCase.workStaffId);
 const inferredStaff = legacy.staff.find(item => item.name === '既存職人');
 assert.equal(inferredStaff.canSurvey, true);
 assert.equal(inferredStaff.canWork, true);
+assert.equal(Boolean(legacyCase.propertyId), true);
+assert.equal(legacyCase.propertyId, samePropertyCase.propertyId);
+assert.notEqual(legacyCase.propertyId, differentPropertyCase.propertyId);
+assert.equal(samePropertyCase.property, ' 既存物件　 ');
+const migratedProperty = legacy.properties.find(item => item.id === legacyCase.propertyId);
+assert.equal(migratedProperty.name, '既存物件');
+assert.equal(migratedProperty.address, '既存住所A');
+assert.equal(migratedProperty.managementCompany, '既存管理A');
 
 localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
 const access = createLocalDataAccess();
@@ -48,7 +63,7 @@ assert.equal(access.adapter, 'localStorage');
 assert.equal(access.cases.get('legacy-1').property, '既存物件');
 
 const createdCase = {
-  id:'test-case', property:'テスト物件', room:'201号室', workflowHistory:[],
+  id:'test-case', propertyId:legacyCase.propertyId, property:'テスト物件', room:'201号室', workflowHistory:[],
   photos:{ survey:[], before:[], during:[], after:[] },
   photoMetadata:{ survey:[], before:[], during:[], after:[] }
 };
@@ -83,6 +98,17 @@ access.staff.update('staff-test', { active:false });
 assert.equal(access.staff.get('staff-test').active, false);
 assert.equal(access.staff.getByName('既存職人').id, legacyCase.surveyStaffId);
 assert.equal(access.staff.getByLoginUserId('worker-a').name, '職人A');
+assert.equal(access.properties.get(legacyCase.propertyId).name, '既存物件');
+access.properties.update(legacyCase.propertyId, { active:false });
+assert.equal(access.properties.get(legacyCase.propertyId).active, false);
+assert.equal(access.cases.get('legacy-1').propertyId, legacyCase.propertyId);
+access.properties.update(legacyCase.propertyId, { active:true });
+const addedProperty = { id:'property-test', name:'テストビル', address:'住所', managementCompany:'管理会社', ownerName:'所有者', parkingInfo:'', accessInfo:'', commonNote:'', active:true, createdAt:'2026-09-01', updatedAt:'2026-09-01' };
+assert.equal(access.properties.create(addedProperty).name, 'テストビル');
+assert.equal(access.properties.getByName(' テストビル ').id, 'property-test');
+access.properties.update('property-test', { active:false });
+assert.equal(access.properties.get('property-test').active, false);
+assert.equal(access.cases.get('test-case').propertyId, legacyCase.propertyId);
 assert.equal(access.snapshot.save(), true);
 assert.equal(JSON.parse(localStorage.getItem(STORAGE_KEY)).cases.some(item => item.id === 'test-case'), true);
 assert.equal(state, access.snapshot.current());
@@ -113,6 +139,8 @@ const reset = access.snapshot.reset();
 assert.equal(reset.cases.some(item => item.id === 'test-case'), false);
 assert.equal(Boolean(reset.cases.find(item => item.id === 'c1').surveyStaffId), true);
 assert.equal(Boolean(reset.cases.find(item => item.id === 'c5').workStaffId), true);
+assert.equal(reset.properties.length, 3);
+assert.equal(reset.cases.find(item => item.id === 'c1').propertyId, 'property-001');
 assert.equal(access.snapshot.current(), reset);
 
 console.log('data-access tests: ok');

@@ -1,4 +1,4 @@
-import { USERS } from './auth.js?v=20260901-16';
+import { USERS } from './auth.js?v=20260901-17';
 
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
@@ -17,6 +17,11 @@ export const INITIAL_STAFF = Object.freeze([
   { id:'staff-takahashi-team', name:'高橋班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true },
   { id:'staff-sasaki-team', name:'佐々木班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true }
 ]);
+export const INITIAL_PROPERTIES = Object.freeze([
+  { id:'property-001', name:'○○マンション', address:'東京都○○区○○町1-2-3', managementCompany:'○○管理株式会社', ownerName:'', parkingInfo:'', accessInfo:'', commonNote:'', active:true },
+  { id:'property-002', name:'△△ハイツ', address:'東京都△△区△△町3-4-5', managementCompany:'△△不動産', ownerName:'', parkingInfo:'', accessInfo:'', commonNote:'', active:true },
+  { id:'property-003', name:'□□コーポ', address:'埼玉県□□市□□1-1-1', managementCompany:'□□管理', ownerName:'', parkingInfo:'1台利用可', accessInfo:'', commonNote:'', active:true }
+]);
 export const PHOTO_GROUPS = { survey: '現調写真', before: '施工前', during: '施工中', after: '施工後' };
 
 const dateKey = (offset = 0) => {
@@ -26,18 +31,21 @@ const dateKey = (offset = 0) => {
 };
 
 const caseData = (data) => ({
-  id: '', property: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
+  id: '', propertyId: '', property: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
   surveyStaff: '未定', surveyStaffId: '', surveyAt: '', surveyDurationMinutes: DEFAULT_DURATIONS.survey,
   workStaff: '未定', workStaffId: '', workAt: '', workDurationMinutes: DEFAULT_DURATIONS.work,
   materialOrderedAt: '', materialDeliveryAt: '', materialReceivedAt: '',
   supplier: '', materialNote: '', estimateAmount: 0, note: '', nextActionOverride: '', residentResponseId: '', workflowHistory: [], photos: { survey: [], before: [], during: [], after: [] }, photoMetadata: { survey: [], before: [], during: [], after: [] },
-  ...data
+  ...data,
+  propertyId:data.propertyId || INITIAL_PROPERTIES.find(item => item.name === data.property)?.id || ''
 });
 
 export function createInitialState() {
+  const createdAt = new Date().toISOString();
   return {
     currentUser: USERS[0],
     staff: INITIAL_STAFF.map(item => ({ ...item })),
+    properties: INITIAL_PROPERTIES.map(item => ({ ...item, createdAt, updatedAt:createdAt })),
     auditLogs: [
       { id: 'a1', at: new Date().toISOString(), user: '事務所', property: '○○マンション', room: '101号室', caseId: 'c1', detail: 'デモ案件を登録' }
     ],
@@ -66,6 +74,59 @@ const normalizeStaff = (item, index) => ({
   loginUserId:String(item?.loginUserId || ''),
   active:item?.active !== false
 });
+export const normalizePropertyName = value => String(value || '').trim().replace(/[\s\u3000]+/g, ' ');
+const legacyPropertyId = name => `property-legacy-${Array.from(name || 'property').reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) >>> 0, 11).toString(36)}`;
+const normalizeProperty = (item, index, now) => ({
+  id:String(item?.id || legacyPropertyId(normalizePropertyName(item?.name) || `property-${index}`)),
+  name:normalizePropertyName(item?.name),
+  address:String(item?.address || '').trim(),
+  managementCompany:String(item?.managementCompany || '').trim(),
+  ownerName:String(item?.ownerName || '').trim(),
+  parkingInfo:String(item?.parkingInfo || '').trim(),
+  accessInfo:String(item?.accessInfo || '').trim(),
+  commonNote:String(item?.commonNote || '').trim(),
+  active:item?.active !== false,
+  createdAt:item?.createdAt || now,
+  updatedAt:item?.updatedAt || item?.createdAt || now
+});
+
+function migrateProperties(state) {
+  const now = new Date().toISOString();
+  const properties = [];
+  const names = new Map();
+  const addProperty = raw => {
+    const item = normalizeProperty(raw, properties.length, now);
+    if (!item.name) return null;
+    const key = normalizePropertyName(item.name);
+    const existing = names.get(key);
+    if (existing) {
+      ['address','managementCompany','ownerName','parkingInfo','accessInfo','commonNote'].forEach(field => {
+        if (!existing[field] && item[field]) existing[field] = item[field];
+      });
+      return existing;
+    }
+    const baseId = item.id;
+    let suffix = 2;
+    while (properties.some(property => property.id === item.id)) item.id = `${baseId}-${suffix++}`;
+    properties.push(item);
+    names.set(key, item);
+    return item;
+  };
+  (Array.isArray(state.properties) ? state.properties : []).forEach(addProperty);
+  state.cases.forEach(item => {
+    const key = normalizePropertyName(item.property);
+    if (!key) {
+      item.propertyId = '';
+      return;
+    }
+    let property = properties.find(candidate => candidate.id === item.propertyId) || names.get(key);
+    if (!property) property = addProperty({ name:key, address:item.address, managementCompany:item.owner });
+    if (!property.address && item.address) property.address = String(item.address).trim();
+    if (!property.managementCompany && item.owner) property.managementCompany = String(item.owner).trim();
+    item.propertyId = property.id;
+  });
+  state.properties = properties;
+}
 const dataUrlMime = source => /^data:([^;,]+)/.exec(source || '')?.[1] || 'image/jpeg';
 const dataUrlSize = source => Math.max(0, Math.floor(((source || '').split(',')[1]?.length || 0) * .75));
 const normalizePhotoMetadata = (metadata = {}, photos, caseId) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(group => [group, photos[group].map((source, index) => {
@@ -108,6 +169,7 @@ export function migrateState(raw) {
     usedIds.add(added.id);
     state.cases.push(added);
   });
+  migrateProperties(state);
   const savedStaff = Array.isArray(state.staff) ? state.staff.map(normalizeStaff).filter(item => item.name) : [];
   INITIAL_STAFF.forEach(defaultStaff => {
     if (!savedStaff.some(item => item.id === defaultStaff.id || item.name === defaultStaff.name)) savedStaff.push({ ...defaultStaff });
@@ -136,6 +198,10 @@ export function migrateState(raw) {
 }
 
 export function createCase() { return caseData({ id: `c${Date.now()}` }); }
+export function createProperty() {
+  const now = new Date().toISOString();
+  return normalizeProperty({ id:`property-${Date.now()}-${Math.random().toString(16).slice(2)}`, active:true, createdAt:now, updatedAt:now }, 0, now);
+}
 export function clone(value) { return JSON.parse(JSON.stringify(value)); }
 export function todayKey() { return dateKey(0); }
 export function plusDays(offset) { return dateKey(offset); }
