@@ -12,3 +12,13 @@ test('CORS originは完全一致の列として読み込みワイルドカード
   assert.deepEqual(config.allowedOrigins, ['https://one.test','https://two.test']);
   assert.throws(() => loadConfig({ ALLOWED_ORIGINS:'*' }), /ワイルドカード/);
 });
+
+test('PostgreSQL設定は明示URLを要求しmemory既定を維持する', () => {
+  assert.equal(loadConfig({}).dataProvider, 'memory');
+  assert.throws(() => loadConfig({ DATA_PROVIDER:'postgres' }), /DATABASE_URL/);
+  const config = loadConfig({ DATA_PROVIDER:'postgres', DATABASE_URL:'postgresql://placeholder.invalid/test', DATABASE_SSL:'true', DATABASE_POOL_MAX:'5', RUN_MIGRATIONS:'true' });
+  assert.equal(config.dataProvider, 'postgres');
+  assert.equal(config.databaseSsl, true);
+  assert.equal(config.databasePoolMax, 5);
+  assert.equal(config.runMigrations, true);
+});

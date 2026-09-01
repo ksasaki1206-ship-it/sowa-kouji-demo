@@ -18,3 +18,9 @@ export function assertStoreContract(name, store) {
 }
 
 export const STORE_CONTRACTS = REQUIRED_METHODS;
+
+export function assertDataProvider(provider) {
+  if (typeof provider?.withTransaction !== 'function') throw new Error('data provider.withTransaction が実装されていません。');
+  if (typeof provider?.close !== 'function') throw new Error('data provider.close が実装されていません。');
+  return provider;
+}

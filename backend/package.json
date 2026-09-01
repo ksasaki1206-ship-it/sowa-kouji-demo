@@ -3,9 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test tests/*.test.mjs"
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test tests/*.test.mjs",
+    "test:postgres": "node --test tests/postgres-provider.test.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
   }
 }

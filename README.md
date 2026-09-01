@@ -163,6 +163,19 @@ Google Sheets / Drive SDK、APIキー、サービスアカウント鍵、Google�
 
 GitHub Pagesのmeta設定は引き続き `local` です。ローカル開発時だけ、例えば `?dataSource=http&apiBaseUrl=http://127.0.0.1:8080&apiAuth=mock` でmemory Backendとの契約確認ができます。localhost以外ではqueryによるデータソース上書きを無視します。memory Backendは再起動で消えるため、実運用の共有保存には使用できません。
 
+## 第4-B2弾のPostgreSQL共有永続化基盤
+
+BackendのStore契約を維持したまま、`DATA_PROVIDER=memory` または `DATA_PROVIDER=postgres` を選択できるようにしました。PostgreSQLを正本とし、案件・物件・部屋・担当者・入居者回答・工程/予定履歴・操作履歴・写真metadataを再起動後も保持します。
+
+- SQL migrationをrepositoryでversion管理
+- 案件/物件/部屋/担当者はDBの比較更新でversion競合を409へ変換
+- 案件変更と工程/予定履歴/audit、resident回答と案件反映、写真metadataとauditをtransaction化
+- memory providerはAPI契約・unit test用として維持
+- 既定のGitHub Pagesは引き続きlocal modeで、localStorageデータをBackendへ自動importしない
+- password hash、session、認証秘密情報、写真binaryは業務DBへ保存しない
+
+設定、schema、migration、integration test、backup方針は `backend/README.md` を参照してください。Cloud Run/Cloud SQL作成、正式認証、写真binary共有は後工程です。
+
 ## データアクセス層
 
 現在のデータフローは次のとおりです。

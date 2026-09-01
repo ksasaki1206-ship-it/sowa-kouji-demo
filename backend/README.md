@@ -1,68 +1,104 @@
-# sowa-kouji-api 第4-A骨格
+# sowa-kouji-api 第4-B2共有永続化基盤
 
-Cloud Run上のHTTPS APIへ移行するための契約確認用バックエンドです。Cloud RunではコンテナのHTTPポートをプラットフォームがHTTPS公開する前提です。
-
-> 第4-Aの `memory` providerは開発・API契約確認専用です。プロセス再起動でデータが消え、複数インスタンス間でも共有されません。永続的な共有保存は第4-B以降で実装します。
+Cloud Run上のHTTPS APIを想定したBackendです。第4-B2では既存API契約を維持したまま、開発用 `memory` と共有永続化用 `postgres` を切り替えられます。Cloud Runへの本番deploy、正式認証、写真binary保存はまだ行いません。
 
 ## 構造
 
-`app/router → authenticateRequest / requireRole → api-service → store contract → memory provider`
+`router → authenticateRequest / requireRole → api-service → store contract → memory provider | PostgreSQL provider`
 
 - `src/app.js`: `/api/v1` routing、JSON形式、CORS、共通エラー
 - `src/auth.js`: 認証provider境界、開発用mock user、role判定
-- `src/services/api-service.js`: 業務認可、worker assignment check、audit自動生成、公開情報の最小化
+- `src/services/api-service.js`: 業務認可、worker assignment、transaction単位、audit自動生成
 - `src/providers/contracts.js`: Case / Property / Room / Staff / Response / Audit / Photo Store契約
-- `src/providers/memory-provider.js`: 第4-A専用の非永続mock provider
-- `src/server.js`: 環境設定と依存の組み立て
+- `src/providers/memory-provider.js`: API契約・unit test用の非永続provider
+- `src/providers/postgres-provider.js`: `pg` だけを使う共有永続provider
+- `src/db/migrate.js`: version管理されたSQL migration runner
+- `db/migrations/`: 適用順序をファイル名で固定したmigration
 
-Google Sheets / Drive固有コードは含みません。第4-B/Cではstore契約を保ったままproviderを差し替えます。
+`memory` は再起動で消え、複数instance間で共有されません。`postgres` は同じPostgreSQLへ接続するBackend間で業務データを共有します。Frontend localStorageとの自動同期・自動importは行いません。
 
-## ローカル確認
+## データモデル
 
-Node.js 20以上を使用します。外部依存はありません。
+正本はPostgreSQLです。検索・関係・競合制御に使うcore fieldは通常column、既存の可変項目と将来拡張項目は補助 `extra_data JSONB` に保存します。JSONBだけを正本にはしていません。
+
+| table | 主な通常column |
+| --- | --- |
+| `properties` | id、name、address、management_company、owner_name、active、version |
+| `rooms` | id、property_id、room_number、normalized_room_number、active、version |
+| `staff` | id、name、login_user_id、can_survey、can_work、active、version |
+| `cases` | id、property_id、room_id、status、lifecycle_status、is_archived、各担当ID、現調/施工日時、材料日、見積、resident token、version |
+| `responses` | id、case/property/room ID、希望日時、連絡先、受付日時、反映状態 |
+| `workflow_history` | case_id、順序、工程、完了日時、実施者 |
+| `schedule_history` | case_id、順序、種別、変更前後、理由、変更者 |
+| `audit_logs` | id、日時、user/userId、caseId、物件/部屋表示、変更内容 |
+| `photo_metadata` | id、case_id、分類、file名、MIME、size、保存provider/key |
+
+`rooms → properties`、`cases → properties/rooms`、`responses/workflow_history/schedule_history/photo_metadata → cases` にFKがあります。空文字またはlegacy担当IDを維持するため、現段階では案件の担当者IDに厳格なFKを付けずserviceで整合確認します。物理削除APIは追加せず、案件はlifecycle/アーカイブ、マスタは `active=false` を維持します。写真APIのDELETEは既存どおりmetadataだけが対象です。
+
+## 更新競合とtransaction
+
+案件・物件・部屋・担当者の更新は、DB上で次の比較更新を行います。
+
+`UPDATE ... SET version = version + 1 WHERE id = $1 AND version = $2 RETURNING ...`
+
+0件更新時だけ存在確認し、存在しなければ404、version不一致なら409を返します。案件更新とworkflow/schedule history、audit、resident回答と案件反映、写真metadataとauditは同一PostgreSQL transactionです。途中失敗時はrollbackされます。
+
+## 設定とmigration
+
+Node.js 20以上、PostgreSQL 17相当を基準にします。DB依存は `pg` のみです。
 
 ```sh
+npm ci
 npm test
+npm run migrate
 npm start
 ```
 
-管理APIのmock認証では開発時だけ `x-mock-user-id` を指定します。
+既定は従来どおり `DATA_PROVIDER=memory` です。PostgreSQL利用時だけBackend環境へ次を設定します。
 
-- `nishiyama`: admin
-- `takahashi`: admin
-- `hajime`: admin
-- `office`: office
-- `worker-a`: worker
+```text
+DATA_PROVIDER=postgres
+DATABASE_URL=postgresql://...
+DATABASE_SSL=false
+DATABASE_POOL_MAX=10
+RUN_MIGRATIONS=false
+```
 
-`NODE_ENV=production` ではmock authを無効にします。本番認証providerが未実装の第4-Aコンテナは、production設定で管理APIへログインできません。これは誤ってmock認証を本番利用しないための制限です。
+`DATABASE_URL` はBackendだけが参照し、Frontendへ渡しません。migrationは `schema_migrations` に適用済みfileを記録します。運用ではdeploy前の専用jobから `npm run migrate` を実行する方針を推奨します。開発時だけ `RUN_MIGRATIONS=true` で起動前適用も可能です。
 
-## API・権限
+PostgreSQL integration testは破壊的なtable初期化を含むため、専用test DBに対してだけ明示的に実行します。
 
-契約の詳細は `openapi.yaml` を参照してください。
+```text
+TEST_DATABASE_URL=postgresql://...test_database
+ALLOW_DATABASE_RESET=true
+npm run test:postgres
+```
 
-- admin: 全案件、マスタ参照・更新
-- office: 案件管理、マスタ参照
-- worker: 担当者マスタの `loginUserId` で紐づく担当案件だけ
-- public resident: 管理認証を要求せずtokenを検証し、物件表示名・部屋表示名・受付状態だけ返す
+test/development seedはtest内でのみ投入し、production起動時には自動投入しません。
 
-通常ユーザーがauditを任意作成するPOST endpointはありません。案件・回答・写真metadataの変更時にserviceが自動生成します。パスワード、パスワードハッシュ、セッションは業務storeに保存しません。
+## localStorageからのデータ移行
 
-更新APIは現在の `version` を受け取り、保存済みversionと異なる場合は `409 CONFLICT` を返します。第4-BではSheets上のversion列等を使った原子的な比較更新が必要です。
+起動時の `localStorage → Backend` 自動importは禁止しています。デモデータとパイロットデータを混在させないためです。将来importする場合は、adminが明示実行するdry-run付きCLIまたは管理jobとして、ID/FK/重複/versionを検証し、import対象と結果をauditできる別工程にします。
 
-写真APIはmetadataだけを扱います。画像本体のupload、署名URL、Google Drive保存は第4-Cの対象です。
+## API・認証・写真
 
-## CORS
+APIの成功・一覧・error形式と `/api/v1` endpointは維持しています。管理APIはBackendでadmin/office/workerを認可し、workerは担当案件だけを扱います。public resident APIはtokenを検証し、物件・部屋表示名と受付状態だけを返します。
 
-`ALLOWED_ORIGINS` はカンマ区切りの完全一致です。Originなしのサーバー間・開発確認は許可し、Origin付きブラウザ通信は許可一覧だけに応答します。本番で `*` は使用しません。
+現在のmock認証はdevelopment専用です。`NODE_ENV=production` では無効になり、第4-B3で正式認証providerへ差し替えます。password、password hash、session、認証秘密情報はPostgreSQL業務tableへ保存しません。
 
-## Cloud Run・秘密情報の方針
+写真はmetadataだけをPostgreSQLへ保存します。Data URL、画像binary、credentialは保存しません。共有画像本体は第4-Cで専用object storage/Drive providerへ接続します。
 
-- サービスアカウント鍵JSON、OAuth client secret、APIキーをGitHubへ置かない
-- Cloud Runのservice identityを優先し、Sheets / Driveへ必要最小限のIAM権限だけを付与する
-- 鍵以外の秘密情報が必要な場合はSecret Managerを利用する
-- 秘密情報をGitHub PagesやAPIレスポンスへ渡さない
-- 今回はサービスアカウント作成、Secret Manager登録、Cloud Run deployを行わない
+## Secret・Cloud SQL・backup方針
+
+- `.env`、database password、API key、service account鍵、private tokenをGitへ置かない
+- `.env.example` は項目名とplaceholderだけにする
+- Cloud Run service identityとCloud SQL Connector/安全な接続方式を第4-B3で設定する
+- Secretが必要な場合はSecret ManagerからBackendへ注入し、Frontendへ渡さない
+- productionではCloud SQL automated backupとPITRを有効化する
+- 1週間pilot開始直前にlogical exportを取得し、復元手順も確認する
+
+第4-B2ではCloud SQL作成、backup設定、Cloud Run deploy、正式authenticationを実行しません。
 
 ## Docker
 
-`node:22-alpine`、production dependenciesのみ、non-rootの `node` ユーザー、Cloud Runの `PORT` 環境変数を前提にしています。第4-Aではimage build確認だけが対象で、deployは行いません。
+`node:22-alpine`、production dependenciesのみ、non-rootの `node` user、`PORT`環境変数を前提にします。imageにはmigration SQLを含めますが、コンテナbuild/deploy時にDB credentialを埋め込みません。

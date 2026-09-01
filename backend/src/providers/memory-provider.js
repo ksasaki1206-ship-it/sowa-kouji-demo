@@ -1,5 +1,5 @@
 import { conflictError, notFoundError } from '../errors.js';
-import { assertStoreContract } from './contracts.js';
+import { assertDataProvider, assertStoreContract } from './contracts.js';
 
 const clone = value => value === undefined ? undefined : structuredClone(value);
 const now = () => new Date().toISOString();
@@ -56,13 +56,16 @@ export function createMockSeed() {
 export function createMemoryProvider(seed = createMockSeed()) {
   const provider = {
     kind:'memory',
+    persistent:false,
     cases:new MemoryStore(seed.cases, '案件'),
     properties:new MemoryStore(seed.properties, '物件'),
     rooms:new MemoryStore(seed.rooms, '部屋'),
     staff:new MemoryStore(seed.staff, '担当者'),
     responses:new MemoryStore(seed.responses, '入居者回答'),
     audit:new MemoryStore(seed.auditLogs, '操作履歴'),
-    photos:new MemoryStore(seed.photos, '写真メタデータ')
+    photos:new MemoryStore(seed.photos, '写真メタデータ'),
+    async withTransaction(work) { return work(provider); },
+    async close() {}
   };
   assertStoreContract('CaseStore', provider.cases);
   assertStoreContract('PropertyStore', provider.properties);
@@ -71,5 +74,6 @@ export function createMemoryProvider(seed = createMockSeed()) {
   assertStoreContract('ResponseStore', provider.responses);
   assertStoreContract('AuditStore', provider.audit);
   assertStoreContract('PhotoStore', provider.photos);
+  assertDataProvider(provider);
   return Object.freeze(provider);
 }

@@ -4,23 +4,29 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { createMockAuthProvider } from './auth.js';
 import { loadConfig } from './config.js';
-import { createMemoryProvider } from './providers/memory-provider.js';
+import { createDataProvider } from './providers/provider-factory.js';
 import { createApiService } from './services/api-service.js';
 
-export function buildServer(config = loadConfig()) {
-  if (config.dataProvider !== 'memory') throw new Error(`第4-Aで利用できるDATA_PROVIDERはmemoryのみです: ${config.dataProvider}`);
-  const provider = createMemoryProvider();
+export async function buildServer(config = loadConfig()) {
+  const provider = await createDataProvider(config);
   const service = createApiService(provider);
   const authProvider = createMockAuthProvider({ enabled:config.mockAuthEnabled });
-  return createServer(createApp({ service, authProvider, allowedOrigins:config.allowedOrigins }));
+  const server = createServer(createApp({ service, authProvider, allowedOrigins:config.allowedOrigins }));
+  server.on('close', () => provider.close().catch(error => console.error('data provider close failed', error)));
+  return server;
 }
 
-export function startServer(config = loadConfig()) {
-  const server = buildServer(config);
+export async function startServer(config = loadConfig()) {
+  const server = await buildServer(config);
   server.listen(config.port, '0.0.0.0', () => {
-    console.log(`sowa-kouji-api listening on ${config.port} (${config.dataProvider}, persistent=false)`);
+    console.log(`sowa-kouji-api listening on ${config.port} (${config.dataProvider}, persistent=${config.dataProvider === 'postgres'})`);
   });
   return server;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) startServer();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  startServer().catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

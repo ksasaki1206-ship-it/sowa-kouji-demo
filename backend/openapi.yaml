@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Sowa Kouji API
   version: v1
-  description: 第4-Aのmemory providerで検証するAPI契約。永続共有保存は行わない。
+  description: memory / PostgreSQL providerで共通利用するAPI契約。正式認証と写真binary共有は後工程。
 servers:
   - url: https://api.example.invalid/api/v1
 security:
@@ -72,7 +72,7 @@ paths:
         '200': { $ref: '#/components/responses/List' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
-      summary: 写真metadata登録。画像本体は第4-Aでは受け付けない。
+      summary: 写真metadata登録。画像本体は第4-B2では受け付けない。
       requestBody: { $ref: '#/components/requestBodies/JsonBody' }
       responses:
         '201': { $ref: '#/components/responses/Success' }
@@ -233,7 +233,7 @@ components:
       type: apiKey
       in: header
       name: x-mock-user-id
-      description: 第4-Aのdevelopment環境だけで利用する契約確認用ユーザー。productionでは無効。
+      description: development環境だけで利用する契約確認用ユーザー。productionでは無効。
   parameters:
     CaseId:
       name: caseId
