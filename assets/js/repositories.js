@@ -1,6 +1,6 @@
-import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-20';
-import { USER_DEFINITIONS } from './auth.js?v=20260901-20';
-import { changeSchedule, postponeSchedule, cancelCase, restoreCancelledCase, archiveCase, unarchiveCase } from './lifecycle.js?v=20260901-20';
+import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-21';
+import { USER_DEFINITIONS } from './auth.js?v=20260901-21';
+import { changeSchedule, postponeSchedule, cancelCase, restoreCancelledCase, archiveCase, unarchiveCase } from './lifecycle.js?v=20260901-21';
 
 const array = (state, key) => Array.isArray(state?.[key]) ? state[key] : [];
 const matchId = (item, id) => item?.id === id;

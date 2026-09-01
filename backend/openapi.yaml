@@ -1,0 +1,319 @@
+openapi: 3.1.0
+info:
+  title: Sowa Kouji API
+  version: v1
+  description: 第4-Aのmemory providerで検証するAPI契約。永続共有保存は行わない。
+servers:
+  - url: https://api.example.invalid/api/v1
+security:
+  - bearerAuth: []
+  - mockUser: []
+paths:
+  /health:
+    get:
+      security: []
+      summary: 稼働状態
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+  /cases:
+    get:
+      summary: 案件一覧。workerは担当案件だけ。
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      summary: 案件登録（admin / office）
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /cases/{caseId}:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      summary: 案件詳細
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: 案件更新。version必須。
+      requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /cases/{caseId}/workflow-history:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      summary: 工程履歴
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /cases/{caseId}/schedule-history:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      summary: 予定変更履歴
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /cases/{caseId}/photos:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      summary: 写真metadata一覧
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: 写真metadata登録。画像本体は第4-Aでは受け付けない。
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /cases/{caseId}/photos/{photoId}:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+      - name: photoId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: 写真metadata削除
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /properties:
+    get:
+      summary: 物件一覧（admin / office）
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+    post:
+      summary: 物件登録（admin）
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /properties/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      summary: 物件詳細
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: 物件更新・active切替（admin、version必須）
+      requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /rooms:
+    get:
+      summary: 部屋一覧（admin / office）
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+    post:
+      summary: 部屋登録（admin）
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /rooms/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      summary: 部屋詳細
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+    patch:
+      summary: 部屋更新・active切替（admin、version必須）
+      requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /staff:
+    get:
+      summary: 担当者一覧（admin / office）
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+    post:
+      summary: 担当者登録（admin）
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /staff/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      summary: 担当者詳細
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+    patch:
+      summary: 担当者更新・active切替（admin、version必須）
+      requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /responses:
+    get:
+      summary: 入居者回答一覧（admin / office）
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /responses/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      summary: 入居者回答詳細（admin / office）
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /audit:
+    get:
+      summary: 操作履歴一覧。任意作成POSTは提供しない。
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /public/resident/{token}:
+    parameters:
+      - $ref: '#/components/parameters/ResidentToken'
+    get:
+      security: []
+      summary: 入居者回答画面に必要な最小情報
+      responses:
+        '200':
+          description: 公開情報
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required: [propertyName, roomName, accepting, closed]
+                    properties:
+                      propertyName: { type: string }
+                      roomName: { type: string }
+                      accepting: { type: boolean }
+                      closed: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /public/resident/{token}/responses:
+    parameters:
+      - $ref: '#/components/parameters/ResidentToken'
+    post:
+      security: []
+      summary: 入居者希望日時を送信
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OIDC
+      description: 第4-B以降で実装する正式認証。
+    mockUser:
+      type: apiKey
+      in: header
+      name: x-mock-user-id
+      description: 第4-Aのdevelopment環境だけで利用する契約確認用ユーザー。productionでは無効。
+  parameters:
+    CaseId:
+      name: caseId
+      in: path
+      required: true
+      schema: { type: string }
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    ResidentToken:
+      name: token
+      in: path
+      required: true
+      schema: { type: string, minLength: 16 }
+  requestBodies:
+    JsonBody:
+      required: true
+      content:
+        application/json:
+          schema: { type: object }
+    VersionedJsonBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [version]
+            properties:
+              version: { type: integer, minimum: 1 }
+            additionalProperties: true
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, INTERNAL_ERROR]
+            message: { type: string }
+            details: { type: object }
+  responses:
+    Success:
+      description: 成功
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties: { data: {} }
+    List:
+      description: 一覧
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data, meta]
+            properties:
+              data: { type: array, items: {} }
+              meta:
+                type: object
+                required: [count]
+                properties: { count: { type: integer, minimum: 0 } }
+    Validation:
+      description: 入力不正
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: 未認証
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: 権限なし
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: 見つからない
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: 更新競合・業務競合
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

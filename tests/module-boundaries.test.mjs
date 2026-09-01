@@ -32,5 +32,9 @@ for (const file of ['data-access.js', 'repositories.js', 'storage.js']) {
   assert.doesNotMatch(sources.get(file), /CREDENTIALS_KEY|hashPassword|passwordHash|credentials\.users/, `${file}へ認証資格情報が混入しています`);
 }
 
+assert.doesNotMatch(sources.get('app.js'), /\bfetch\s*\(/, 'app.jsから直接HTTP通信しないでください');
+assert.doesNotMatch(sources.get('http-data-provider.js'), /storage|localStorage|local-data-provider/, 'HTTP providerへlocal保存を混在させないでください');
+assert.doesNotMatch(sources.get('local-data-provider.js'), /fetch|api-client|http-data-provider/, 'local providerへHTTP通信を混在させないでください');
+
 assert.equal(relative(root, jsRoot).startsWith('..'), false);
 console.log('module-boundary tests: ok');

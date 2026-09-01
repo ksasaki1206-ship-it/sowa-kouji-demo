@@ -1,4 +1,4 @@
-import { localStorageDriver } from './storage-driver.js?v=20260901-20';
+import { localStorageDriver } from './storage-driver.js?v=20260901-21';
 
 export const AUTH_KEY = 'sowa-demo-auth-v1';
 export const CREDENTIALS_KEY = 'sowa-demo-credentials-v1';

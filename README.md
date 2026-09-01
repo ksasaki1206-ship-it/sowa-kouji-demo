@@ -10,7 +10,12 @@
 - `assets/js/storage-driver.js`: localStorage固有APIの隔離
 - `assets/js/storage.js`: 既存保存キーと状態スナップショットの読み書き
 - `assets/js/repositories.js`: 案件・物件・部屋・回答・履歴・工程・ユーザー・担当者・写真のデータ操作
-- `assets/js/data-access.js`: 画面から利用するデータアクセス窓口
+- `assets/js/data-access.js`: local / HTTP providerを選択するデータアクセス窓口
+- `assets/js/local-data-provider.js`: 既存の同期localStorage data provider
+- `assets/js/http-data-provider.js`: 将来の共有API向け非同期data provider
+- `assets/js/api-client.js`: base URL、JSON、timeout、HTTP共通エラー変換
+- `assets/js/data-source-config.js`: 公開feature flagとAPI接続先設定
+- `assets/js/bootstrap.js`: local画面起動またはHTTP接続状態表示
 - `assets/js/audit.js`: 操作履歴と案件編集時の差分記録
 - `assets/js/auth.js`: ロール付きユーザー定義、権限定義、ログイン状態、パスワードのハッシュ化・変更・リセット
 - `assets/js/workflow.js`: 次アクション、要対応判定、管理指標、担当者別予定の業務ルール
@@ -115,6 +120,33 @@
 この静的デモの保存先はブラウザごとのlocalStorageです。同じ端末・ブラウザでは案件URL、回答、履歴を確認できますが、別端末で送信した回答が管理側端末へ同期されることはありません。初期デモ案件の公開トークンは端末間で同じデモ値を使い、追加案件や再発行後のトークンとデータはその端末内だけで有効です。複数端末での正式運用には、認証・権限検証を行うバックエンドと共有データストアが必要です。
 
 QR生成には [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) を使用し、`assets/vendor/qrcode-generator/qrcode.mjs` とMITライセンス原文 `assets/vendor/qrcode-generator/LICENSE` を同梱しています。
+
+## 第4-A弾の共有バックエンド基盤
+
+Frontendのデータ境界を次の構造へ拡張しました。
+
+`画面 / workflow → data-access → local provider または HTTP provider`
+
+`index.html` の公開meta設定 `sowa-data-source` は既定で `local` です。現在のGitHub Pagesは従来どおりlocalStorageだけで動き、backendが停止していても影響を受けません。HTTP失敗時にlocalへ自動保存するfallbackは行わず、データの正を混在させません。
+
+HTTP providerはPromiseベースです。第4-AではAPI client、provider契約、接続・共通エラー表示までを実装し、既存の同期業務画面はlocalモードだけで起動します。全画面の非同期化と共有API運用は、第4-B以降で段階的に行います。
+
+`backend/` にはCloud Runを想定したNode.js API骨格を追加しました。
+
+`router → mock authentication / role → service → store contract → memory provider`
+
+- `/api/v1` でversion固定
+- admin / office / workerをbackendでも検証
+- workerの担当案件判定をserviceへ分離
+- public resident endpointはtoken検証後の最小情報だけ返却
+- 更新時の `version` 不一致を `409 CONFLICT` へ変換
+- CORS許可originは `ALLOWED_ORIGINS` の完全一致
+- Case / Property / Room / Staff / Response / Audit / Photo Store契約を定義
+- 写真はmetadataのみ。画像本体は保存しない
+
+第4-Aのmemory providerはAPI契約確認専用で、再起動時に消え、複数端末・複数インスタンス間の永続共有はできません。Frontend localStorageとの自動同期も行いません。API詳細、Docker、mock auth、Secret方針は `backend/README.md` と `backend/openapi.yaml` を参照してください。
+
+Google Sheets / Drive SDK、APIキー、サービスアカウント鍵、Google認証、Cloud Run deployは今回追加していません。本番ではCloud Run service identityへ最小権限を付与し、必要な秘密情報だけをSecret Managerで管理します。秘密情報をGitHub Pagesへ渡しません。
 
 ## データアクセス層
 

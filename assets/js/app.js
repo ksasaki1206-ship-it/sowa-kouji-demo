@@ -1,12 +1,12 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-20';
-import { dataAccess } from './data-access.js?v=20260901-20';
-import { addAudit, auditChanges } from './audit.js?v=20260901-20';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-20';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-20';
-import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-20';
-import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-20';
-import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-20';
-import { createQrSvg } from './qr.js?v=20260901-20';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-21';
+import { dataAccess } from './data-access.js?v=20260901-21';
+import { addAudit, auditChanges } from './audit.js?v=20260901-21';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-21';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-21';
+import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-21';
+import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-21';
+import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-21';
+import { createQrSvg } from './qr.js?v=20260901-21';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;
