@@ -9,7 +9,7 @@ globalThis.localStorage = {
 
 const { STORAGE_KEY, migrateState } = await import('../assets/js/data.js');
 const { createLocalDataAccess } = await import('../assets/js/data-access.js');
-const { AUTH_KEY, CREDENTIALS_KEY, authenticate, ensureCredentials, getSession, logout, resetAllPasswords } = await import('../assets/js/auth.js');
+const { AUTH_KEY, CREDENTIALS_KEY, authenticate, changeOwnPassword, ensureCredentials, getSession, logout, resetAllPasswords, resetUserPassword } = await import('../assets/js/auth.js');
 
 assert.equal(STORAGE_KEY, 'sowa-demo-photo-v1');
 assert.equal(AUTH_KEY, 'sowa-demo-auth-v1');
@@ -84,6 +84,12 @@ assert.equal(access.users.list().some(user => 'hash' in user || 'password' in us
 assert.equal(JSON.stringify(access.snapshot.current()).includes('existing-changed-password-hash'), false);
 await resetAllPasswords();
 assert.equal((await authenticate('西山さん', 'password')).role, 'admin');
+assert.equal((await changeOwnPassword('西山さん', 'password', 'new-password')).ok, true);
+assert.equal(await authenticate('西山さん', 'password'), null);
+assert.equal((await authenticate('西山さん', 'new-password')).user, '西山さん');
+assert.equal((await resetUserPassword('office', '西山さん')).ok, false);
+assert.equal((await resetUserPassword('admin', '西山さん')).ok, true);
+assert.equal((await authenticate('西山さん', 'password')).user, '西山さん');
 assert.equal(getSession().user, '西山さん');
 logout();
 assert.equal(getSession(), null);

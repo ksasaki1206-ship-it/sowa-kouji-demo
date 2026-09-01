@@ -60,16 +60,18 @@ export function getCaseAlerts(state, item) {
   const alerts = [];
   const statusIndex = indexOfStatus(item.status);
   const response = responseForCase(state, item);
+  const surveyIn = dayDiff(item.surveyAt);
   const workIn = dayDiff(item.workAt);
   const add = (code, label, priority, reason) => alerts.push({ code, label, priority, reason, caseId:item.id });
   if (!response && !item.surveyAt && statusIndex <= indexOfStatus('現調調整中')) add('response-wait', '入居者回答待ち', 'high', '希望日時の回答を確認してください');
   if (!item.surveyAt && statusIndex <= indexOfStatus('現調調整中')) add('survey-undecided', '現調日未確定', 'high', '現調日時を確定してください');
+  if (item.surveyAt && (!item.surveyStaff || item.surveyStaff === '未定')) add('survey-staff-undecided', '現調担当未定', 'high', surveyIn === 0 ? '本日の現調担当を設定してください' : surveyIn > 0 && surveyIn <= 3 ? `${surveyIn}日後の現調担当を設定してください` : '日時確定済みの現調担当を設定してください');
+  if (item.workAt && (!item.workStaff || item.workStaff === '未定')) add('work-staff-undecided', '工事担当未定', 'high', workIn === 0 ? '本日の工事担当を設定してください' : workIn > 0 && workIn <= 3 ? `${workIn}日後の工事担当を設定してください` : '日時確定済みの工事担当を設定してください');
   if (['現調済','見積中'].includes(item.status) && !Number(item.estimateAmount)) add('estimate-missing', '見積未作成', 'high', '見積金額が未入力です');
   if (statusIndex >= indexOfStatus('受注') && statusIndex < indexOfStatus('施工済') && !item.materialOrderedAt) add('material-unordered', '材料未発注', 'high', '受注後の材料発注日が未登録です');
   if (item.materialDeliveryAt && !item.materialReceivedAt && dateOnly(item.materialDeliveryAt) < todayKey()) add('material-overdue', '納品予定超過', 'high', '納品予定日を過ぎています');
   if (item.materialDeliveryAt && !item.materialReceivedAt && dateOnly(item.materialDeliveryAt) === todayKey()) add('material-unconfirmed', '納品未確認', 'medium', '本日納品予定です');
   if ((item.status === '材料納品済' || item.materialReceivedAt) && !item.workAt) add('work-undecided', '施工日未確定', 'high', '材料納品後の施工日時が未定です');
-  if (workIn != null && workIn >= 0 && workIn <= 3 && item.workStaff === '未定') add('worker-undecided', '施工担当未定', 'high', `${workIn === 0 ? '本日' : `${workIn}日後`}の施工担当を設定してください`);
   if (statusIndex >= indexOfStatus('施工済') && !item.photos.after.length) add('after-photo-missing', '施工後写真なし', 'high', '施工後写真を登録してください');
   const lastActivity = lastCaseActivity(state, item);
   if (lastActivity && (Date.now() - new Date(lastActivity).getTime()) / 86400000 >= 14) add('stale', '長期間更新なし', 'medium', '14日以上更新されていません');
@@ -95,7 +97,8 @@ export function matchesCasePreset(state, item, preset) {
   if (preset === 'today-work') return dateOnly(item.workAt) === todayKey();
   if (preset === 'week-work') return isThisWeek(item.workAt);
   if (preset === 'complete') return item.status === '完了';
-  if (['material-unordered','material-overdue','material-unconfirmed','after-photo-missing'].includes(preset)) return getCaseAlerts(state, item).some(alert => alert.code === preset);
+  if (preset === 'staff-undecided') return getCaseAlerts(state, item).some(alert => ['survey-staff-undecided','work-staff-undecided'].includes(alert.code));
+  if (['survey-staff-undecided','work-staff-undecided','material-unordered','material-overdue','material-unconfirmed','after-photo-missing'].includes(preset)) return getCaseAlerts(state, item).some(alert => alert.code === preset);
   return true;
 }
 

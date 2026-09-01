@@ -48,7 +48,10 @@ function ensurePhase2Ui() {
   const oldDelivery = $('caseForm').querySelector('input[name="materialDeliveryAt"]');
   nextActionLabel.insertAdjacentHTML('beforebegin', '<div class="two material-fields"><label><span>材料発注日</span><input class="input" type="date" name="materialOrderedAt"></label><label><span>材料納品予定日</span><input class="input" type="date" name="materialDeliveryAt"></label></div><div class="two material-fields"><label><span>材料納品確認日</span><input class="input" type="date" name="materialReceivedAt"></label><label><span>仕入先</span><input class="input" name="supplier" placeholder="○○サッシ株式会社"></label></div><label class="material-fields"><span>材料メモ</span><textarea class="textarea" name="materialNote" placeholder="別便・不足部材など"></textarea></label>');
   oldDelivery?.closest('label')?.remove();
-  ['material-unordered','material-overdue','after-photo-missing'].forEach((value, index) => $('casePreset').add(new Option(['材料未発注','納品遅延','施工後写真不足'][index], value)));
+  [
+    ['survey-staff-undecided','現調担当未定'], ['work-staff-undecided','工事担当未定'], ['staff-undecided','担当未定すべて'],
+    ['material-unordered','材料未発注'], ['material-overdue','納品遅延'], ['after-photo-missing','施工後写真不足']
+  ].forEach(([value, label]) => $('casePreset').add(new Option(label, value)));
   document.body.insertAdjacentHTML('beforeend', '<div id="photoWarningModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photoWarningTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="photoWarningTitle" class="big">施工後写真が未登録です</div></div><p>施工後写真が登録されていません。このまま工程を進めますか？</p><div class="warning-actions"><button id="photoWarningAdd" class="btn primary" type="button">写真を追加する</button><button id="photoWarningProceed" class="btn danger" type="button">このまま進める</button><button id="photoWarningCancel" class="btn" type="button">キャンセル</button></div></div></div><div id="workerCompleteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="workerCompleteTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="workerCompleteTitle" class="big">作業完了報告</div><button id="closeWorkerComplete" class="btn" type="button">閉じる</button></div><form id="workerCompleteForm" class="form"><input type="hidden" name="caseId"><div id="workerCompletePhoto" class="completion-photo"></div><label><span>完了報告・現場備考</span><textarea class="textarea" name="completionNote" placeholder="作業内容や申し送り"></textarea></label><label class="confirm-check"><input type="checkbox" name="confirmed" required><span>作業内容と写真を確認しました</span></label><button class="btn primary full" type="submit">完了を報告する</button></form></div></div>');
 }
 
@@ -126,7 +129,7 @@ function renderCases() {
   const preset = $('casePreset').value;
   const cases = dataAccess.cases.list().filter(c => (sessionRole !== 'worker' || workerOwnsCase(c, sessionUser)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
   const presetLabel = $('casePreset').selectedOptions[0]?.textContent || '';
-  $('activeCaseFilter').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
+  $('activeCaseFilterText').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
   $('activeCaseFilter').classList.toggle('hidden', preset === 'all');
   $('caseList').innerHTML = cases.map(caseRow).join('') || '<div class="card empty">該当案件はありません。</div>';
   wireCaseLinks($('caseList'));
@@ -188,7 +191,7 @@ function openDetail(id) {
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
     <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
     <section class="card detail-card"><h2 class="section-title">工事</h2><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定日時</div><div class="val">${esc(fmtDateTime(c.workAt))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
-    <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button><button id="setSurvey" class="btn">現調日を設定</button><button id="setWork" class="btn">施工日を設定</button></div>
+    <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button></div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
     <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">この案件の変更履歴</h2><div class="case-history">${caseHistoryHtml(c)}</div></section>`;
@@ -226,25 +229,6 @@ function wireDetail(c) {
     requestPhotoCheckedAction(c, targetStatus, () => advanceCase(c, targetStatus));
   });
   $('editCase').addEventListener('click', () => openCaseModal(c));
-  $('setSurvey').addEventListener('click', () => quickSet(c, 'survey'));
-  $('setWork').addEventListener('click', () => quickSet(c, 'work'));
-}
-
-function quickSet(c, type) {
-  const before = clone(c);
-  if (type === 'survey') {
-    c.surveyStaff = c.surveyStaff === '未定' ? SURVEY_STAFF[1] : c.surveyStaff;
-    c.surveyAt = `${plusDays(2)}T10:00`;
-    if (c.status === '問い合わせ') c.status = '現調調整中';
-  } else {
-    c.workStaff = c.workStaff === '未定' ? WORK_STAFF[1] : c.workStaff;
-    c.workAt = `${plusDays(9)}T09:00`;
-    if (STATUSES.indexOf(c.status) < STATUSES.indexOf('施工予定')) c.status = '施工予定';
-  }
-  auditChanges(state, before, c);
-  recordWorkflowStep(c, c.status, sessionUser);
-  persist(type === 'survey' ? '現調予定を設定しました。' : '施工予定を設定しました。');
-  openDetail(c.id);
 }
 
 function compressImage(file) {
@@ -389,7 +373,8 @@ function monthDays() {
 }
 
 function scheduleTable(cases, days) {
-  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><b>${esc(c.room)}</b><br><span class="muted">${esc(c.residentName || '未登録')}</span></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event survey open-case" data-id="${esc(c.id)}">現調<br>${esc(c.surveyAt.slice(11,16))}</a>` : ''}${datePart(c.workAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event work open-case" data-id="${esc(c.id)}">工事<br>${esc(c.workAt.slice(11,16))}</a>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const staffLabel = value => value && value !== '未定' ? value : '担当未定';
+  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><button class="schedule-room-link open-case" type="button" data-id="${esc(c.id)}" aria-label="${esc(`${c.property} ${c.room}の案件詳細`)}"><b>${esc(c.room)}</b><span>${esc(c.residentName || '未登録')}</span></button></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event survey open-case" data-id="${esc(c.id)}" aria-label="現調 ${esc(c.surveyAt.slice(11,16))} ${esc(staffLabel(c.surveyStaff))}"><span>現調</span><time>${esc(c.surveyAt.slice(11,16))}</time><small title="${esc(staffLabel(c.surveyStaff))}">${esc(staffLabel(c.surveyStaff))}</small></a>` : ''}${datePart(c.workAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event work open-case" data-id="${esc(c.id)}" aria-label="工事 ${esc(c.workAt.slice(11,16))} ${esc(staffLabel(c.workStaff))}"><span>工事</span><time>${esc(c.workAt.slice(11,16))}</time><small title="${esc(staffLabel(c.workStaff))}">${esc(staffLabel(c.workStaff))}</small></a>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 }
 
 function alignScheduleToToday(scroll) {
@@ -528,6 +513,13 @@ function openCasePreset(preset) {
   show('cases');
 }
 
+function clearCaseFilters() {
+  $('search').value = '';
+  $('filter').value = 'all';
+  $('casePreset').value = 'all';
+  renderCases();
+}
+
 function setFormError(id, message) {
   const node = $(id);
   node.textContent = message;
@@ -649,8 +641,8 @@ async function init() {
   $('search').addEventListener('input', renderCases);
   $('filter').addEventListener('change', renderCases);
   $('casePreset').addEventListener('change', renderCases);
-  $('stOpen').closest('[data-case-preset]').dataset.casePreset = 'open';
   document.querySelectorAll('[data-case-preset]').forEach(button => button.addEventListener('click', () => openCasePreset(button.dataset.casePreset)));
+  $('clearCaseFilter').addEventListener('click', clearCaseFilters);
   $('showAllAlerts').addEventListener('click', () => openCasePreset('alerts'));
   $('newCase').addEventListener('click', () => openCaseModal(null));
   $('back').addEventListener('click', () => show('cases'));
