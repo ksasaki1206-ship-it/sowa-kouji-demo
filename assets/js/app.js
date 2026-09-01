@@ -1,10 +1,12 @@
 import { USERS, STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
 import { loadState, saveState, resetState } from './storage.js';
 import { addAudit, auditChanges } from './audit.js';
+import { getSession, login, logout as clearSession } from './auth.js';
 
 let state = loadState();
 let currentCaseId = null;
 let noticeTimer = 0;
+let sessionUser = '';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -328,17 +330,36 @@ function setDefaultResponseDates() {
   if (!form.elements.d2.value) form.elements.d2.value = plusDays(4);
 }
 
+function showLogin() {
+  sessionUser = '';
+  $('appRoot').classList.add('hidden');
+  $('loginView').classList.remove('hidden');
+  $('loginUser').focus();
+}
+
+function activateSession(user) {
+  if (!USERS.includes(user)) return showLogin();
+  sessionUser = user;
+  state.currentUser = user;
+  saveState(state);
+  $('loggedInUser').textContent = user;
+  $('loginView').classList.add('hidden');
+  $('appRoot').classList.remove('hidden');
+  show('home');
+}
+
 function init() {
-  populateSelect($('currentUser'), USERS);
-  $('currentUser').value = state.currentUser;
+  populateSelect($('loginUser'), USERS);
   populateSelect($('statusSelect'), STATUSES);
   populateSelect($('surveyStaffSelect'), SURVEY_STAFF);
   populateSelect($('workStaffSelect'), WORK_STAFF);
   setDefaultResponseDates();
   persist();
+  $('loginButton').addEventListener('click', () => activateSession(login($('loginUser').value).user));
+  $('loginUser').addEventListener('keydown', event => { if (event.key === 'Enter') $('loginButton').click(); });
+  $('logoutButton').addEventListener('click', () => { clearSession(); showLogin(); });
   document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => show(button.dataset.view)));
   document.querySelectorAll('[data-response-mode]').forEach(button => button.addEventListener('click', () => setResponseMode(button.dataset.responseMode)));
-  $('currentUser').addEventListener('change', event => { state.currentUser = event.target.value; persist(`操作ユーザーを「${state.currentUser}」に変更しました。`); });
   $('search').addEventListener('input', renderCases);
   $('filter').addEventListener('change', renderCases);
   $('newCase').addEventListener('click', () => openCaseModal(null));
@@ -356,14 +377,16 @@ function init() {
   $('resetDemo').addEventListener('click', () => {
     if (!confirm('デモ内容と写真、変更履歴を初期状態に戻しますか？')) return;
     state = resetState();
-    $('currentUser').value = state.currentUser;
+    state.currentUser = sessionUser;
+    saveState(state);
     $('filter').innerHTML = '';
     $('historyUser').innerHTML = '';
     $('historyProperty').innerHTML = '';
     renderCases(); renderHome();
     notify('初期状態に戻しました。');
   });
-  show('home');
+  const session = getSession();
+  session && USERS.includes(session.user) ? activateSession(session.user) : showLogin();
 }
 
 init();
