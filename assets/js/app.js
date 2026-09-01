@@ -2,12 +2,14 @@ import { STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, to
 import { loadState, saveState, resetState } from './storage.js';
 import { addAudit, auditChanges } from './audit.js';
 import { USER_DEFINITIONS, USERS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
+import { getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, responseForCase as workflowResponseForCase } from './workflow.js';
 
 let state = loadState();
 let currentCaseId = null;
 let noticeTimer = 0;
 let sessionUser = '';
 let sessionRole = '';
+let scheduleMode = 'property';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -16,7 +18,7 @@ const fmtMoney = value => Number(value || 0).toLocaleString('ja-JP') + '円';
 const datePart = value => value ? value.slice(0, 10) : '';
 const properties = () => [...new Set(state.cases.map(c => c.property).filter(Boolean))].sort();
 const caseById = id => state.cases.find(c => c.id === id);
-const responseForCase = c => state.responses.find(r => r.id === c.residentResponseId) || state.responses.find(r => r.caseId === c.id);
+const responseForCase = c => workflowResponseForCase(state, c);
 
 function persist(message) {
   if (!saveState(state)) return notify('保存容量を超えました。写真を減らしてください。');
@@ -36,8 +38,7 @@ function populateSelect(select, values, firstLabel = '') {
 }
 
 function nextAction(c) {
-  const index = STATUSES.indexOf(c.status);
-  return index >= 0 && index < STATUSES.length - 1 ? STATUSES[index + 1] : '完了';
+  return getNextAction(state, c);
 }
 
 function show(view) {
@@ -45,14 +46,15 @@ function show(view) {
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.view === view || (view === 'detail' && button.dataset.view === 'cases')));
   if (view === 'home') renderHome();
   if (view === 'cases') renderCases();
-  if (view === 'schedule') renderSchedule();
+  if (view === 'schedule') scheduleMode === 'property' ? renderSchedule() : renderStaffSchedule();
   if (view === 'responses') renderResponses();
   if (view === 'history') renderHistory();
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
 function caseRow(c) {
-  return `<button class="case open-case" data-id="${esc(c.id)}"><div class="caseHead"><div><b>${esc(c.property)} ${esc(c.room)}</b><div class="muted">次：${esc(nextAction(c))} ／ 現調：${esc(c.surveyStaff)} ／ 工事：${esc(c.workStaff)}</div></div><span class="badge">${esc(c.status)}</span></div></button>`;
+  const alerts = getCaseAlerts(state, c);
+  return `<button class="case open-case" data-id="${esc(c.id)}"><div class="caseHead"><div><b>${esc(c.property)} ${esc(c.room)}</b><div class="next-action">次：${esc(nextAction(c))}</div><div class="muted">現調：${esc(c.surveyStaff)} ／ 工事：${esc(c.workStaff)}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${alerts.length ? `<span class="badge alert-badge">要対応 ${alerts.length}</span>` : ''}</div></div></button>`;
 }
 
 function wireCaseLinks(root = document) {
@@ -61,18 +63,23 @@ function wireCaseLinks(root = document) {
 
 function renderHome() {
   const today = todayKey();
-  const open = state.cases.filter(c => c.status !== '完了').length;
+  const metrics = getDashboardMetrics(state);
   const surveys = state.cases.filter(c => datePart(c.surveyAt) === today);
   const works = state.cases.filter(c => datePart(c.workAt) === today);
-  const waits = state.cases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length;
-  $('stOpen').textContent = open;
-  $('stSurvey').textContent = surveys.length;
-  $('stWork').textContent = works.length;
-  $('stWait').textContent = waits;
+  $('stOpen').textContent = metrics.open;
+  $('stSurvey').textContent = metrics.todaySurvey;
+  $('stWork').textContent = metrics.todayWork;
+  $('stWait').textContent = metrics.responseWait;
+  $('stAlerts').textContent = metrics.alerts;
+  $('stWeekWork').textContent = metrics.weekWork;
+  $('stComplete').textContent = metrics.complete;
   const todayCases = [...new Map([...surveys, ...works].map(c => [c.id, c])).values()];
   const list = todayCases.length ? todayCases : state.cases.slice(0, 5);
   $('todayBlocks').innerHTML = `<div class="card"><div class="title">${todayCases.length ? '今日の予定' : '要対応案件'}</div>${list.map(c => `<button class="row open-case" data-id="${esc(c.id)}"><span><span class="rowMain">${esc(c.property)} ${esc(c.room)}</span><span class="muted">${datePart(c.surveyAt) === today ? `現調 ${esc(c.surveyAt.slice(11))}` : ''}${datePart(c.surveyAt) === today && datePart(c.workAt) === today ? ' ／ ' : ''}${datePart(c.workAt) === today ? `工事 ${esc(c.workAt.slice(11))}` : ''}${todayCases.length ? '' : `${esc(c.status)} ／ 次：${esc(nextAction(c))}`}</span></span><b>›</b></button>`).join('')}</div>`;
   wireCaseLinks($('todayBlocks'));
+  const alerts = getAllAlerts(state).slice(0, 6);
+  $('alertList').innerHTML = alerts.length ? alerts.map(({ item, label, priority, reason }) => `<button class="alert-row open-case" data-id="${esc(item.id)}"><span class="priority ${priority}">${priority === 'high' ? '優先' : '注意'}</span><span class="alert-body"><b>${esc(label)}</b><span>${esc(item.property)} ${esc(item.room)}</span><small>${esc(reason)}</small></span><span class="arrow">›</span></button>`).join('') : '<div class="card empty">現在、要対応案件はありません。</div>';
+  wireCaseLinks($('alertList'));
 }
 
 function renderCases() {
@@ -80,7 +87,11 @@ function renderCases() {
   if (!filter.options.length) populateSelect(filter, STATUSES, 'すべてのステータス');
   const query = $('search').value.trim().toLowerCase();
   const selected = filter.value;
-  const cases = state.cases.filter(c => (selected === 'all' || c.status === selected) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff}`.toLowerCase().includes(query));
+  const preset = $('casePreset').value;
+  const cases = state.cases.filter(c => (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
+  const presetLabel = $('casePreset').selectedOptions[0]?.textContent || '';
+  $('activeCaseFilter').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
+  $('activeCaseFilter').classList.toggle('hidden', preset === 'all');
   $('caseList').innerHTML = cases.map(caseRow).join('') || '<div class="card empty">該当案件はありません。</div>';
   wireCaseLinks($('caseList'));
 }
@@ -93,7 +104,7 @@ function answerHtml(c) {
 
 function photoGroupHtml(c, key, label) {
   const photos = c.photos[key] || [];
-  return `<div class="photoGroup"><b>${esc(label)}</b><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((src, index) => `<div class="thumb"><img src="${src}" alt="${esc(label)} ${index + 1}"><button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((src, index) => `<div class="thumb"><img src="${src}" alt="${esc(label)} ${index + 1}"><button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
 }
 
 function caseHistoryHtml(c) {
@@ -105,8 +116,10 @@ function openDetail(id) {
   const c = caseById(id);
   if (!c) return;
   currentCaseId = id;
+  const alerts = getCaseAlerts(state, c);
   $('detailCard').innerHTML = `
     <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div><div class="muted">${esc(c.residentName || '入居者名未登録')}</div></div><span class="badge">${esc(c.status)}</span></div><div class="kv"><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
+    <section class="card detail-card action-card"><div class="lab">次のアクション</div><div class="big">${esc(nextAction(c))}</div>${alerts.length ? `<div class="detail-alerts">${alerts.map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div>` : '<div class="muted">現在、要対応アラートはありません。</div>'}</section>
     <section class="card detail-card"><h2 class="section-title">入居者回答</h2>${answerHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">現調</h2><div class="kv"><div><div class="lab">現調担当</div><div class="val">${esc(c.surveyStaff)}</div></div><div><div class="lab">現調予定日時</div><div class="val">${esc(fmtDateTime(c.surveyAt))}</div></div></div><div class="gallery single-gallery">${photoGroupHtml(c,'survey',PHOTO_GROUPS.survey)}</div></section>
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
@@ -202,7 +215,7 @@ function openCaseModal(c) {
   form.reset();
   form.elements.id.value = c?.id || '';
   const source = c || createCase();
-  ['property','room','address','owner','status','surveyStaff','surveyAt','estimateAmount','materialDeliveryAt','workStaff','workAt','note'].forEach(key => form.elements[key].value = source[key] ?? '');
+  ['property','room','address','owner','status','surveyStaff','surveyAt','estimateAmount','materialDeliveryAt','workStaff','workAt','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
   form.elements.property.focus();
 }
 
@@ -216,7 +229,7 @@ function saveCaseForm(event) {
   const existing = id ? caseById(id) : null;
   const before = existing ? clone(existing) : null;
   const c = existing || createCase();
-  ['property','room','address','owner','status','surveyStaff','surveyAt','materialDeliveryAt','workStaff','workAt','note'].forEach(key => c[key] = data.get(key) || '');
+  ['property','room','address','owner','status','surveyStaff','surveyAt','materialDeliveryAt','workStaff','workAt','nextActionOverride','note'].forEach(key => c[key] = data.get(key) || '');
   c.estimateAmount = Number(data.get('estimateAmount') || 0);
   if (!existing) {
     state.cases.push(c);
@@ -341,6 +354,42 @@ function showLogin() {
   $('loginUser').focus();
 }
 
+function setScheduleMode(mode) {
+  scheduleMode = mode;
+  $('propertySchedulePanel').classList.toggle('hidden', mode !== 'property');
+  $('staffSchedulePanel').classList.toggle('hidden', mode !== 'staff');
+  document.querySelectorAll('[data-schedule-mode]').forEach(button => button.classList.toggle('primary', button.dataset.scheduleMode === mode));
+  mode === 'property' ? renderSchedule() : renderStaffSchedule();
+}
+
+function renderStaffSchedule() {
+  const staffSelect = $('scheduleStaff');
+  const staff = [...new Set(state.cases.flatMap(c => [c.surveyStaff, c.workStaff]).filter(name => name && name !== '未定'))].sort((a,b) => a.localeCompare(b, 'ja'));
+  const previous = staffSelect.value || 'all';
+  populateSelect(staffSelect, staff, '全担当者');
+  staffSelect.value = previous === 'all' || staff.includes(previous) ? previous : 'all';
+  const scope = $('scheduleScope').value;
+  const allEvents = getStaffEvents(state, scope);
+  const events = staffSelect.value === 'all' ? allEvents : allEvents.filter(event => event.staff === staffSelect.value);
+  const surveyCount = events.filter(event => event.type === 'survey').length;
+  const workCount = events.filter(event => event.type === 'work').length;
+  const people = new Set(events.map(event => event.staff)).size;
+  $('staffScheduleSummary').innerHTML = [['担当者',people,'人'],['現調',surveyCount,'件'],['工事',workCount,'件']].map(([label,count,unit]) => `<div class="summary"><span class="k">${label}</span><b>${count}</b><span class="muted">${unit}</span></div>`).join('');
+  const groups = staffSelect.value === 'all' ? [...new Set(events.map(event => event.staff))] : [staffSelect.value];
+  $('staffScheduleList').innerHTML = groups.map(name => {
+    const staffEvents = events.filter(event => event.staff === name);
+    return `<section class="card staff-group"><div class="title">${esc(name)} <span class="muted">${staffEvents.length}件</span></div>${staffEvents.map(event => `<button class="staff-event open-case" data-id="${esc(event.item.id)}"><span class="event-date">${esc(fmtDateTime(event.at))}</span><span class="event-kind ${event.type}">${esc(event.label)}</span><span class="event-place"><b>${esc(event.item.property)} ${esc(event.item.room)}</b><small>${esc(event.item.address || '住所未登録')}</small></span><span class="arrow">›</span></button>`).join('')}</section>`;
+  }).join('') || '<div class="card empty">選択期間の予定はありません。</div>';
+  wireCaseLinks($('staffScheduleList'));
+}
+
+function openCasePreset(preset) {
+  if (preset === 'open' && ![...$('casePreset').options].some(option => option.value === 'open')) $('casePreset').add(new Option('進行中', 'open'));
+  $('casePreset').value = preset;
+  $('filter').value = 'all';
+  show('cases');
+}
+
 function setFormError(id, message) {
   const node = $(id);
   node.textContent = message;
@@ -434,6 +483,10 @@ async function init() {
   document.querySelectorAll('[data-response-mode]').forEach(button => button.addEventListener('click', () => setResponseMode(button.dataset.responseMode)));
   $('search').addEventListener('input', renderCases);
   $('filter').addEventListener('change', renderCases);
+  $('casePreset').addEventListener('change', renderCases);
+  $('stOpen').closest('[data-case-preset]').dataset.casePreset = 'open';
+  document.querySelectorAll('[data-case-preset]').forEach(button => button.addEventListener('click', () => openCasePreset(button.dataset.casePreset)));
+  $('showAllAlerts').addEventListener('click', () => openCasePreset('alerts'));
   $('newCase').addEventListener('click', () => openCaseModal(null));
   $('back').addEventListener('click', () => show('cases'));
   $('closeModal').addEventListener('click', closeCaseModal);
@@ -441,6 +494,9 @@ async function init() {
   $('caseForm').addEventListener('submit', saveCaseForm);
   $('residentForm').addEventListener('submit', saveResidentResponse);
   $('scheduleProperty').addEventListener('change', renderSchedule);
+  document.querySelectorAll('[data-schedule-mode]').forEach(button => button.addEventListener('click', () => setScheduleMode(button.dataset.scheduleMode)));
+  $('scheduleStaff').addEventListener('change', renderStaffSchedule);
+  $('scheduleScope').addEventListener('change', renderStaffSchedule);
   $('historyUser').addEventListener('change', renderHistory);
   $('historyProperty').addEventListener('change', renderHistory);
   window.addEventListener('hashchange', () => {
@@ -452,7 +508,9 @@ async function init() {
     await resetAllPasswords();
     state.currentUser = sessionUser;
     saveState(state);
+    $('search').value = '';
     $('filter').innerHTML = '';
+    $('casePreset').value = 'all';
     $('historyUser').innerHTML = '';
     $('historyProperty').innerHTML = '';
     renderCases(); renderHome();

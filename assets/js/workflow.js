@@ -1,0 +1,99 @@
+import { STATUSES } from './data.js';
+
+const indexOfStatus = status => Math.max(0, STATUSES.indexOf(status));
+const dateOnly = value => value ? value.slice(0, 10) : '';
+const dayDiff = value => value ? Math.ceil((new Date(`${dateOnly(value)}T00:00:00`) - new Date(`${todayKey()}T00:00:00`)) / 86400000) : null;
+const todayKey = () => {
+  const date = new Date();
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+};
+
+export function responseForCase(state, item) {
+  return state.responses.find(response => response.id === item.residentResponseId) || state.responses.find(response => response.caseId === item.id);
+}
+
+export function getNextAction(state, item) {
+  if (item.nextActionOverride?.trim()) return item.nextActionOverride.trim();
+  const statusIndex = indexOfStatus(item.status);
+  if (!responseForCase(state, item) && !item.surveyAt && statusIndex <= indexOfStatus('現調調整中')) return '入居者回答待ち';
+  if (!item.surveyAt && statusIndex <= indexOfStatus('現調調整中')) return '現調日確定';
+  if (item.status === '問い合わせ') return '現調日程調整';
+  if (item.status === '現調調整中') return '現調実施';
+  if (item.status === '現調済') return '見積作成';
+  if (item.status === '見積中') return '見積提出';
+  if (item.status === '見積提出') return '受注確認';
+  if (item.status === '受注') return item.materialDeliveryAt ? '材料納品待ち' : '材料発注';
+  if (item.status === '材料手配中') return '材料納品待ち';
+  if (item.status === '材料納品済') return item.workAt ? '施工担当設定' : '施工日確定';
+  if (item.status === '施工予定') return item.workStaff === '未定' ? '施工担当設定' : '施工実施';
+  if (item.status === '施工済') return item.photos.after.length ? '写真確認' : '施工後写真登録';
+  if (item.status === '写真登録') return '完了確認';
+  return '完了';
+}
+
+function lastCaseActivity(state, item) {
+  return state.auditLogs.find(log => log.caseId === item.id)?.at || '';
+}
+
+export function getCaseAlerts(state, item) {
+  if (item.status === '完了') return [];
+  const alerts = [];
+  const statusIndex = indexOfStatus(item.status);
+  const response = responseForCase(state, item);
+  const workIn = dayDiff(item.workAt);
+  const add = (code, label, priority, reason) => alerts.push({ code, label, priority, reason, caseId:item.id });
+  if (!response && !item.surveyAt && statusIndex <= indexOfStatus('現調調整中')) add('response-wait', '入居者回答待ち', 'high', '希望日時の回答を確認してください');
+  if (!item.surveyAt && statusIndex <= indexOfStatus('現調調整中')) add('survey-undecided', '現調日未確定', 'high', '現調日時を確定してください');
+  if (['現調済','見積中'].includes(item.status) && !Number(item.estimateAmount)) add('estimate-missing', '見積未作成', 'high', '見積金額が未入力です');
+  if (item.status === '受注' && !item.materialDeliveryAt) add('material-unordered', '材料未手配', 'high', '受注後の材料予定が未登録です');
+  if (item.status === '材料納品済' && !item.workAt) add('work-undecided', '施工日未確定', 'high', '材料納品後の施工日時が未定です');
+  if (workIn != null && workIn >= 0 && workIn <= 3 && item.workStaff === '未定') add('worker-undecided', '施工担当未定', 'high', `${workIn === 0 ? '本日' : `${workIn}日後`}の施工担当を設定してください`);
+  if (statusIndex >= indexOfStatus('施工済') && !item.photos.after.length) add('after-photo-missing', '施工後写真なし', 'high', '施工後写真を登録してください');
+  const lastActivity = lastCaseActivity(state, item);
+  if (lastActivity && (Date.now() - new Date(lastActivity).getTime()) / 86400000 >= 14) add('stale', '長期間更新なし', 'medium', '14日以上更新されていません');
+  return alerts;
+}
+
+export function getAllAlerts(state) {
+  return state.cases.flatMap(item => getCaseAlerts(state, item).map(alert => ({ ...alert, item })))
+    .sort((a, b) => (a.priority === b.priority ? 0 : a.priority === 'high' ? -1 : 1));
+}
+
+export function isThisWeek(value) {
+  const diff = dayDiff(value);
+  return diff != null && diff >= 0 && diff <= 6;
+}
+
+export function matchesCasePreset(state, item, preset) {
+  if (!preset || preset === 'all') return true;
+  if (preset === 'open') return item.status !== '完了';
+  if (preset === 'alerts') return getCaseAlerts(state, item).length > 0;
+  if (preset === 'response-wait') return getCaseAlerts(state, item).some(alert => alert.code === 'response-wait');
+  if (preset === 'today-survey') return dateOnly(item.surveyAt) === todayKey();
+  if (preset === 'today-work') return dateOnly(item.workAt) === todayKey();
+  if (preset === 'week-work') return isThisWeek(item.workAt);
+  if (preset === 'complete') return item.status === '完了';
+  return true;
+}
+
+export function getDashboardMetrics(state) {
+  const alerts = getAllAlerts(state);
+  return {
+    open:state.cases.filter(item => item.status !== '完了').length,
+    todaySurvey:state.cases.filter(item => dateOnly(item.surveyAt) === todayKey()).length,
+    todayWork:state.cases.filter(item => dateOnly(item.workAt) === todayKey()).length,
+    responseWait:state.cases.filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'response-wait')).length,
+    alerts:new Set(alerts.map(alert => alert.caseId)).size,
+    weekWork:state.cases.filter(item => isThisWeek(item.workAt)).length,
+    complete:state.cases.filter(item => item.status === '完了').length
+  };
+}
+
+export function getStaffEvents(state, scope = 'week') {
+  const today = todayKey();
+  const include = value => scope === 'today' ? dateOnly(value) === today : isThisWeek(value);
+  return state.cases.flatMap(item => [
+    include(item.surveyAt) && item.surveyStaff !== '未定' ? { type:'survey', label:'現調', staff:item.surveyStaff, at:item.surveyAt, item } : null,
+    include(item.workAt) && item.workStaff !== '未定' ? { type:'work', label:'工事', staff:item.workStaff, at:item.workAt, item } : null
+  ].filter(Boolean)).sort((a, b) => a.at.localeCompare(b.at));
+}

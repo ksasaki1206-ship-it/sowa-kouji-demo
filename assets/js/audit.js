@@ -1,7 +1,7 @@
 const LABELS = {
   property:'物件名', room:'部屋番号', address:'住所', owner:'管理会社 / オーナー', status:'ステータス',
   surveyStaff:'現調担当', surveyAt:'現調日', estimateAmount:'見積金額', materialDeliveryAt:'材料納品日',
-  workStaff:'工事担当', workAt:'工事日', note:'備考'
+  workStaff:'工事担当', workAt:'工事日', nextActionOverride:'次のアクション', note:'備考'
 };
 
 const display = (key, value) => {

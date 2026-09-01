@@ -2,8 +2,8 @@ import { USERS } from './auth.js';
 
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
-export const SURVEY_STAFF = ['未定', '西山さん', '高橋さん', '佐藤', '鈴木', '田中'];
-export const WORK_STAFF = ['未定', '山田班', '高橋班', '佐々木班', '職人A'];
+export const SURVEY_STAFF = ['未定', '西山さん', '高橋さん', '一さん', '事務所', '職人A', '佐藤', '鈴木', '田中'];
+export const WORK_STAFF = ['未定', '西山さん', '高橋さん', '一さん', '事務所', '職人A', '山田班', '高橋班', '佐々木班'];
 export const PHOTO_GROUPS = { survey: '現調写真', before: '施工前', during: '施工中', after: '施工後' };
 
 const dateKey = (offset = 0) => {
@@ -15,7 +15,7 @@ const dateKey = (offset = 0) => {
 const caseData = (data) => ({
   id: '', property: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
   surveyStaff: '未定', surveyAt: '', workStaff: '未定', workAt: '', materialDeliveryAt: '',
-  estimateAmount: 0, note: '', residentResponseId: '', photos: { survey: [], before: [], during: [], after: [] },
+  estimateAmount: 0, note: '', nextActionOverride: '', residentResponseId: '', photos: { survey: [], before: [], during: [], after: [] },
   ...data
 });
 
@@ -52,7 +52,7 @@ export function migrateState(raw) {
     const demo = fallback.cases.find(item => item.property === c.property && item.room === c.room);
     return caseData({
     ...c, id: c.id || `c-legacy-${index}`, residentName: c.residentName || demo?.residentName || '', materialDeliveryAt: c.materialDeliveryAt || '',
-    estimateAmount: Number(c.estimateAmount || 0), residentResponseId: c.residentResponseId || '', photos: normalizePhotos(c.photos)
+    estimateAmount: Number(c.estimateAmount || 0), nextActionOverride: c.nextActionOverride || '', residentResponseId: c.residentResponseId || '', photos: normalizePhotos(c.photos)
   }); }) : fallback.cases;
   const usedIds = new Set(state.cases.map(c => c.id));
   fallback.cases.forEach(demo => {
