@@ -1,8 +1,14 @@
+import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { conflictError, notFoundError } from '../errors.js';
 import { assertAuthUserStore } from './user-store-contract.js';
 
 const iso = value => value instanceof Date ? value.toISOString() : String(value || '');
+const attemptHash = subject => createHash('sha256').update(String(subject)).digest('hex');
+const attemptFromRow = row => row ? ({
+  failedCount:Number(row.failed_count), windowStartedAt:iso(row.window_started_at),
+  lockedUntil:row.locked_until ? iso(row.locked_until) : null, updatedAt:iso(row.updated_at)
+}) : null;
 const fromRow = row => row ? {
   id:row.id, loginId:row.login_id, email:row.email, displayName:row.display_name, role:row.role, staffId:row.staff_id,
   active:row.active === true, passwordHash:row.password_hash, passwordSalt:row.password_salt, passwordParams:row.password_params,
@@ -14,10 +20,11 @@ const conflictFrom = error => {
   throw error;
 };
 
-export function createPostgresUserStore({ pool, connectionString, ssl = false, max = 5 } = {}) {
+export function createPostgresUserStore({ pool, connectionString, poolConfig, ssl = false, max = 5 } = {}) {
   const ownsPool = !pool;
-  const executor = pool || new pg.Pool({ connectionString, ssl:ssl ? { rejectUnauthorized:true } : false, max });
-  if (!pool && !String(connectionString || '').trim()) throw new Error('AuthUserStoreにはDATABASE_URLが必要です。');
+  const connection = poolConfig || (connectionString ? { connectionString } : null);
+  if (!pool && !connection) throw new Error('AuthUserStoreにはPostgreSQL接続設定が必要です。');
+  const executor = pool || new pg.Pool({ ...connection, ssl:ssl ? { rejectUnauthorized:true } : false, max });
   const store = {
     kind:'postgres',
     async list() { return (await executor.query('SELECT * FROM auth_users ORDER BY created_at, id')).rows.map(fromRow); },
@@ -61,6 +68,40 @@ export function createPostgresUserStore({ pool, connectionString, ssl = false, m
         throw conflictError('他のユーザーが先に更新しています。再読み込みしてください。', { expectedVersion:Number(expectedVersion), actualVersion:Number(found.rows[0].version) });
       }
       return fromRow(result.rows[0]);
+    },
+    async getLoginAttempt(subject) {
+      const result = await executor.query('SELECT * FROM auth_login_attempts WHERE subject_hash=$1', [attemptHash(subject)]);
+      return attemptFromRow(result.rows[0]);
+    },
+    async recordLoginFailure(subject, { now, windowMs, lockMs, maxFailures }) {
+      const at = new Date(now);
+      const windowCutoff = new Date(at.getTime() - windowMs);
+      const newLockedUntil = new Date(at.getTime() + lockMs);
+      const result = await executor.query(`INSERT INTO auth_login_attempts
+        (subject_hash, failed_count, window_started_at, locked_until, updated_at)
+        VALUES ($1,1,$2,CASE WHEN $4 <= 1 THEN $5 ELSE NULL END,$2)
+        ON CONFLICT (subject_hash) DO UPDATE SET
+          failed_count = CASE
+            WHEN auth_login_attempts.locked_until > $2 THEN auth_login_attempts.failed_count
+            WHEN auth_login_attempts.window_started_at <= $3 THEN 1
+            ELSE auth_login_attempts.failed_count + 1
+          END,
+          window_started_at = CASE
+            WHEN auth_login_attempts.locked_until > $2 THEN auth_login_attempts.window_started_at
+            WHEN auth_login_attempts.window_started_at <= $3 THEN $2
+            ELSE auth_login_attempts.window_started_at
+          END,
+          locked_until = CASE
+            WHEN auth_login_attempts.locked_until > $2 THEN auth_login_attempts.locked_until
+            WHEN (CASE WHEN auth_login_attempts.window_started_at <= $3 THEN 1 ELSE auth_login_attempts.failed_count + 1 END) >= $4 THEN $5
+            ELSE NULL
+          END,
+          updated_at = $2
+        RETURNING *`, [attemptHash(subject), at, windowCutoff, Number(maxFailures), newLockedUntil]);
+      return attemptFromRow(result.rows[0]);
+    },
+    async clearLoginFailures(subject) {
+      await executor.query('DELETE FROM auth_login_attempts WHERE subject_hash=$1', [attemptHash(subject)]);
     },
     async close() { if (ownsPool) await executor.end(); }
   };

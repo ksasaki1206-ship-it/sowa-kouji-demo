@@ -44,6 +44,7 @@ export function createApp({ service, authProvider, authService = null, allowedOr
   };
   const routes = [
     route('GET', /^\/api\/v1\/health$/, ({ service }) => service.health(), { public:true }),
+    route('GET', /^\/api\/v1\/auth\/config$/, () => formalAuth().getPublicConfig(), { public:true }),
     route('POST', /^\/api\/v1\/auth\/login$/, ({ body }) => formalAuth().login(body), { public:true, body:true }),
     route('GET', /^\/api\/v1\/auth\/me$/, ({ user }) => formalAuth().me(user)),
     route('POST', /^\/api\/v1\/auth\/logout$/, ({ user }) => formalAuth().logout(user)),

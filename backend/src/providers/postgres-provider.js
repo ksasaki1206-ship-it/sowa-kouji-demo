@@ -230,12 +230,13 @@ function createProvider(executor, { pool, transactional = false } = {}) {
   return Object.freeze(provider);
 }
 
-export function createPostgresPool({ connectionString, ssl = false, max = 10 } = {}) {
-  if (!String(connectionString || '').trim()) throw new Error('PostgreSQL利用時はDATABASE_URLが必要です。');
-  return new pg.Pool({ connectionString, ssl:ssl ? { rejectUnauthorized:true } : false, max });
+export function createPostgresPool({ connectionString, poolConfig, ssl = false, max = 10 } = {}) {
+  const connection = poolConfig || (connectionString ? { connectionString } : null);
+  if (!connection) throw new Error('PostgreSQL接続設定が必要です。');
+  return new pg.Pool({ ...connection, ssl:ssl ? { rejectUnauthorized:true } : false, max });
 }
 
-export function createPostgresProvider({ pool, connectionString, ssl = false, max = 10 } = {}) {
-  const resolvedPool = pool || createPostgresPool({ connectionString, ssl, max });
+export function createPostgresProvider({ pool, connectionString, poolConfig, ssl = false, max = 10 } = {}) {
+  const resolvedPool = pool || createPostgresPool({ connectionString, poolConfig, ssl, max });
   return createProvider(resolvedPool, { pool:resolvedPool, transactional:false });
 }

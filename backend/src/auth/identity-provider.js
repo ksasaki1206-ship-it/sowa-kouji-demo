@@ -35,6 +35,6 @@ export function createFakeIdentityProvider({ secret = randomBytes(32), now = () 
 }
 
 export function createUnconfiguredIdentityProvider() {
-  const fail = async () => { throw new Error('Identity Platform providerは第4-B3Bで設定してください。'); };
+  const fail = async () => { throw new Error('Identity Platform providerが設定されていません。'); };
   return Object.freeze(assertIdentityProvider({ kind:'unconfigured', createCustomToken:fail, verifyIdToken:fail }));
 }

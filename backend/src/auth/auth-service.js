@@ -32,7 +32,11 @@ const validateRoleAndStaff = async (data, staffStore) => {
   if (data.staffId && !await staffStore.get(data.staffId)) throw validationError('指定された担当者が存在しません。', { field:'staffId' });
 };
 
-export function createAuthService({ userStore, identityProvider, staffStore, auditStore }) {
+export function createAuthService({
+  userStore, identityProvider, staffStore, auditStore,
+  loginProtection = { maxFailures:5, windowMs:15 * 60 * 1000, lockMs:15 * 60 * 1000 },
+  publicIdentityConfig = {}, now = () => Date.now()
+}) {
   const audit = async (actor, detail) => {
     if (!auditStore) return;
     await auditStore.create({ id:`audit-${randomUUID()}`, at:new Date().toISOString(), user:actor?.name || actor?.displayName || '認証システム', userId:actor?.id || '', caseId:'', property:'', room:'', detail, version:1 });
@@ -46,11 +50,25 @@ export function createAuthService({ userStore, identityProvider, staffStore, aud
   };
 
   return Object.freeze({
+    getPublicConfig() {
+      const configured = identityProvider.kind === 'firebase' && Boolean(publicIdentityConfig.apiKey && publicIdentityConfig.authDomain && publicIdentityConfig.projectId);
+      return configured
+        ? { configured:true, provider:'firebase', apiKey:publicIdentityConfig.apiKey, authDomain:publicIdentityConfig.authDomain, projectId:publicIdentityConfig.projectId }
+        : { configured:false, provider:identityProvider.kind };
+    },
     async login(body) {
       const identifier = String(body?.identifier || '').trim();
       const user = identifier ? await userStore.findByIdentifier(identifier) : null;
       const valid = await verifyPassword(String(body?.password || ''), user);
-      if (!user || !valid || user.active !== true) throw invalidLogin();
+      const subject = user ? `user:${user.id}` : `identifier:${identifier.toLowerCase()}`;
+      const loginNow = now();
+      const attempt = await userStore.getLoginAttempt(subject);
+      const locked = attempt?.lockedUntil && new Date(attempt.lockedUntil).getTime() > loginNow;
+      if (!user || !valid || user.active !== true || locked) {
+        if (!locked) await userStore.recordLoginFailure(subject, { now:loginNow, ...loginProtection });
+        throw invalidLogin();
+      }
+      await userStore.clearLoginFailures(subject);
       const customToken = await identityProvider.createCustomToken(user.id);
       await audit(user, 'ログイン');
       return { customToken, user:publicUser(user) };
@@ -71,6 +89,7 @@ export function createAuthService({ userStore, identityProvider, staffStore, aud
       if (newPassword.length < MIN_PRODUCTION_PASSWORD_LENGTH) throw validationError(`新しいパスワードは${MIN_PRODUCTION_PASSWORD_LENGTH}文字以上で入力してください。`);
       const credentials = await hashPassword(newPassword);
       const updated = await userStore.update(user.id, credentials, { expectedVersion:user.version });
+      await userStore.clearLoginFailures(`user:${user.id}`);
       await audit(actor, '自分のパスワードを変更');
       return publicUser(updated);
     },
@@ -115,6 +134,7 @@ export function createAuthService({ userStore, identityProvider, staffStore, aud
       if (!Number.isInteger(version) || version < 1) throw validationError('更新には現在のversionが必要です。', { field:'version' });
       const credentials = await hashPassword(requiredPassword(body?.newPassword));
       const updated = await userStore.update(id, credentials, { expectedVersion:version });
+      await userStore.clearLoginFailures(`user:${id}`);
       await audit(actor, `${updated.displayName}のパスワードをリセット`);
       return publicUser(updated);
     }

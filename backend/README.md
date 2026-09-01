@@ -1,6 +1,6 @@
-# sowa-kouji-api 第4-B3A正式認証基盤
+# sowa-kouji-api 第4-B3B-1 Identity Platform接続準備
 
-Cloud Run上のHTTPS APIを想定したBackendです。第4-B2のPostgreSQL共有永続化を維持し、第4-B3AではloginId/email + password、認証user、Identity Provider境界、Bearer ID token検証、DB上のrole/staffId認可を追加しました。実Identity Platform接続、Cloud Runへの本番deploy、写真binary保存はまだ行いません。
+Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化とB3Aの正式認証境界を維持し、B3B-1ではFirebase Admin SDKによるcustom token発行・ID token検証、公開Web設定、Cloud SQL Unix socket設定、DB共有のlogin試行制限を追加しました。Cloud Runへのdeploy、IAM変更、Secret Manager登録、写真binary保存はまだ行いません。
 
 ## 構造
 
@@ -9,7 +9,8 @@ Cloud Run上のHTTPS APIを想定したBackendです。第4-B2のPostgreSQL共�
 - `src/app.js`: `/api/v1` routing、JSON形式、CORS、共通エラー
 - `src/auth.js`: 認証provider境界、開発用mock user、role判定
 - `src/auth/auth-service.js`: login、本人password変更、admin用user管理
-- `src/auth/identity-provider.js`: custom token発行・ID token検証の差替境界とtest用fake
+- `src/auth/identity-provider.js`: custom token発行・ID token検証の差替境界、test用fake、未設定時fail-closed
+- `src/auth/firebase-identity-provider.js`: Firebase Admin SDKをADCで利用する正式adapter
 - `src/auth/password-service.js`: Node.js標準cryptoのscrypt、user別salt、timing-safe比較
 - `src/auth/*-user-store.js`: 認証user専用memory/PostgreSQL Store
 - `src/cli/bootstrap-admin.js`: 初回だけ実行する初期admin作成CLI
@@ -38,6 +39,7 @@ Cloud Run上のHTTPS APIを想定したBackendです。第4-B2のPostgreSQL共�
 | `audit_logs` | id、日時、user/userId、caseId、物件/部屋表示、変更内容 |
 | `photo_metadata` | id、case_id、分類、file名、MIME、size、保存provider/key |
 | `auth_users` | 不変id、unique login_id、nullable unique email、表示名、role、staff_id、active、scrypt情報、password変更日時、version |
+| `auth_login_attempts` | SHA-256化したlogin subject、失敗回数、集計window、一時lock期限 |
 
 `rooms → properties`、`cases → properties/rooms`、`responses/workflow_history/schedule_history/photo_metadata → cases` にFKがあります。空文字またはlegacy担当IDを維持するため、現段階では案件の担当者IDに厳格なFKを付けずserviceで整合確認します。物理削除APIは追加せず、案件はlifecycle/アーカイブ、マスタは `active=false` を維持します。写真APIのDELETEは既存どおりmetadataだけが対象です。
 
@@ -51,7 +53,7 @@ Cloud Run上のHTTPS APIを想定したBackendです。第4-B2のPostgreSQL共�
 
 ## 設定とmigration
 
-Node.js 20以上、PostgreSQL 17相当を基準にします。DB依存は `pg` のみです。
+Node.js 20以上（Cloud Run imageはNode.js 22）、PostgreSQL 17相当を基準にします。DB接続は `pg`、正式Identity接続は `firebase-admin` を利用し、大型ORMは導入しません。
 
 ```sh
 npm ci
@@ -60,7 +62,7 @@ npm run migrate
 npm start
 ```
 
-既定は従来どおり `DATA_PROVIDER=memory` です。PostgreSQL利用時だけBackend環境へ次を設定します。
+既定は従来どおり `DATA_PROVIDER=memory` です。local PostgreSQLは従来どおり `DATABASE_URL` を利用できます。
 
 ```text
 DATA_PROVIDER=postgres
@@ -71,6 +73,16 @@ RUN_MIGRATIONS=false
 ```
 
 `DATABASE_URL` はBackendだけが参照し、Frontendへ渡しません。migrationは `schema_migrations` に適用済みfileを記録します。運用ではdeploy前の専用jobから `npm run migrate` を実行する方針を推奨します。開発時だけ `RUN_MIGRATIONS=true` で起動前適用も可能です。
+
+Cloud RunからCloud SQLを利用する場合は `DATABASE_URL` の代わりに次を設定します。`DB_HOST` 未指定時は `INSTANCE_CONNECTION_NAME` から `/cloudsql/<INSTANCE_CONNECTION_NAME>` を生成します。DB passwordはSecret ManagerからBackendだけへ注入し、Frontendへ返しません。
+
+```text
+INSTANCE_CONNECTION_NAME=PROJECT:REGION:INSTANCE
+DB_NAME=sowa
+DB_USER=application-user
+DB_PASSWORD=<Secret Managerから注入>
+DATABASE_SSL=false
+```
 
 PostgreSQL integration testは破壊的なtable初期化を含むため、専用test DBに対してだけ明示的に実行します。
 
@@ -104,7 +116,27 @@ API契約は次のとおりです。
 
 passwordは10文字以上、userごとの24 byte saltを使うscryptで保存します。平文、hash、salt、hash parameterはAPI response・audit・errorへ返しません。login失敗は不存在、誤password、inactiveのいずれも同じ401 messageです。userは物理削除せず `active=false` とし、最後の有効adminは無効化・role変更できません。
 
-第4-B3Aの `IDENTITY_PROVIDER=fake` はunit/API契約確認専用です。`NODE_ENV=production` ではfake Identity Providerとmock header認証を拒否します。`IDENTITY_PROVIDER=google` は境界だけであり、未設定のままtoken発行を試みると失敗します。実接続は第4-B3Bで行います。
+`IDENTITY_PROVIDER=fake` はunit/API契約確認専用です。`NODE_ENV=production` ではfake Identity Providerとmock header認証を拒否します。正式環境は `IDENTITY_PROVIDER=firebase`（`identity-platform` はalias）を指定します。未設定は `unconfigured` providerとなり、token発行・検証を必ず失敗させます。
+
+```text
+AUTH_MODE=identity
+IDENTITY_PROVIDER=firebase
+IDENTITY_PROJECT_ID=local-reference-193012
+IDENTITY_AUTH_DOMAIN=local-reference-193012.firebaseapp.com
+IDENTITY_WEB_API_KEY=<Firebase Authentication専用Web API key>
+```
+
+Firebase Admin SDKはCloud RunのApplication Default Credentialsを使います。service account JSONやprivate keyをimage/repositoryへ置きません。custom token発行時、Cloud Run service identityが自分自身またはtoken署名用service accountに対する `iam.serviceAccounts.signBlob` を持つ必要があります。IAM付与はdeploy工程で最小権限を確認して行います。
+
+`GET /api/v1/auth/config` はFirebase Web SDKに必要な `apiKey`、`authDomain`、`projectId`だけを返します。password、DB credential、Admin SDK credential、service account情報は返しません。Firebase Web API keyは公開client設定でありserver secretではありませんが、Firebase Authentication用途専用とし、他のGoogle API用keyやDB secretと共用しません。実値はrepositoryやtest logへ書きません。
+
+Frontendは公式Firebase Web modular SDKをCDNから遅延読込し、custom tokenをID tokenへ交換します。SDK呼出しは `assets/js/firebase-identity-adapter.js` に隔離し、APIごとに `getIdToken()` を呼ぶためSDKの自動refreshへ追従します。logoutはBackend auditを試みた後にFirebase `signOut` を必ず実行します。local modeはSDKも公開config endpointも利用せず、既存デモ認証を維持します。
+
+## Login試行制限
+
+login失敗はPostgreSQLの `auth_login_attempts` に保存します。存在するuserは不変user ID、存在しないidentifierは正規化値を元にしたsubjectをBackendでSHA-256化して保存し、raw loginId/emailやpasswordはtableへ残しません。既定は「15分以内に5回失敗で15分lock」です。複数Cloud Run instanceが同じDB上で原子的なupsertを行います。
+
+lock中、不存在、誤password、inactiveはいずれも同じ401 messageです。lock期限後の正常loginで記録を削除します。本人password変更・admin resetでも対象userのlockを解除します。閾値は `LOGIN_MAX_FAILURES`、`LOGIN_FAILURE_WINDOW_MINUTES`、`LOGIN_LOCK_MINUTES` で変更できます。
 
 ## 初期admin bootstrap
 
@@ -125,9 +157,9 @@ Cloud Run job等では `BOOTSTRAP_ADMIN_PASSWORD_FILE` にSecretのmount pathを
 
 GitHub Pagesの既定 `local` modeと `sowa-demo-*` localStorage keyは変更していません。local modeは従来のユーザー選択 + demo passwordを継続します。HTTP正式認証modeだけログイン欄をidentifier + passwordに切り替えます。
 
-開発時の `AUTH_MODE=mock` と `x-mock-user-id` は既存APIテスト用に維持しますが、`NODE_ENV=production` では必ず無効です。正式modeのFrontendにはIdentity Platform SDKを直接散在させず、`sowaIdentityPlatformAdapter` の `signInWithCustomToken / getIdToken / signOut` 境界を注入します。B3Aでは実Firebase SDK設定を含めていないため、公開GitHub Pagesはlocal modeのままです。
+開発時の `AUTH_MODE=mock` と `x-mock-user-id` は既存APIテスト用に維持しますが、`NODE_ENV=production` では必ず無効です。正式modeのFrontendにはIdentity Platform SDKを直接散在させず、`signInWithCustomToken / getIdToken / signOut` 境界を使います。公開GitHub Pagesは引き続きlocal modeが既定であり、本番Backend URLへの切替はdeploy工程まで行いません。
 
-HTTP通信失敗時にlocalStorageへ自動fallbackしません。正式modeのsession/tokenもdemo用認証localStorageへ保存しません。実Identity SDK側の安全なsession保持は第4-B3Bで設定します。
+HTTP通信失敗時にlocalStorageへ自動fallbackしません。正式modeのsession/tokenもdemo用認証localStorageへ保存せず、Firebase Auth SDKのbrowser local persistenceへ委譲します。
 
 ## API・写真
 
@@ -137,18 +169,17 @@ APIの成功・一覧・error形式と `/api/v1` endpointは維持していま�
 
 写真はmetadataだけをPostgreSQLへ保存します。Data URL、画像binary、credentialは保存しません。共有画像本体は第4-Cで専用object storage/Drive providerへ接続します。
 
-## 第4-B3Bで必要なGoogle Cloud設定
+## B3B-2で必要なGoogle Cloud設定
 
-- Identity Platform（またはFirebase Authentication）をprojectで有効化する
-- Backend実装へFirebase Admin SDK相当のIdentityProvider adapterを追加する
-- Cloud Run service identity / Application Default Credentialsを使い、service account JSONを配置しない
-- FrontendへFirebase公開設定と公式SDK adapterを設定し、custom tokenをID tokenへ交換・refreshする
-- BackendでID tokenのissuer/audience/署名/期限を公式SDKにより検証する
-- Secretが必要な場合だけSecret ManagerからBackendへ注入する
-- CORSを実GitHub Pages originへ限定し、Cloud Run ingress・TLS・監視・rate limit方針を設定する
-- migrationとone-time bootstrapを専用jobから実行し、初期admin passwordを安全に受け渡す
+- Cloud Run service identityへCloud SQL Clientとcustom token署名に必要な最小権限を付与する
+- `iam.serviceAccounts.signBlob` が必要な署名対象service accountを明確にし、過剰なService Account Token Creator付与を避ける
+- Cloud RunへCloud SQL instanceをattachし、socket・DB名・user・Secret Manager参照を設定する
+- Identity Platformのauthorized domainとGitHub Pages originを確認する
+- production CORSを `https://ksasaki1206-ship-it.github.io` の完全一致だけにする
+- migrationを専用jobで適用し、one-time bootstrapを実施する
+- stagingでcustom token発行、Web SDK交換、Bearer検証、role/staffId再取得を実接続確認する
 
-Google Cloud resource作成、credential生成、Secret Manager登録、実token発行は第4-B3Aでは行っていません。
+Google Cloud resource作成、IAM変更、credential生成、Secret Manager登録、deploy、実token発行はB3B-1では行っていません。
 
 ## Secret・Cloud SQL・backup方針
 
@@ -159,7 +190,7 @@ Google Cloud resource作成、credential生成、Secret Manager登録、実token
 - productionではCloud SQL automated backupとPITRを有効化する
 - 1週間pilot開始直前にlogical exportを取得し、復元手順も確認する
 
-第4-B3AではCloud SQL/Identity resource作成、backup設定、Cloud Run deploy、実Identity接続を実行しません。
+B3B-1ではCloud SQL/Identity resource作成、backup設定、Cloud Run deploy、実Identity接続を実行しません。
 
 ## Docker
 

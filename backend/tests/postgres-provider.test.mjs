@@ -52,12 +52,19 @@ test('認証user migrationは業務tableと分離しunique identifier・scrypt�
   assert.doesNotMatch(sql, /DEFAULT\s+'password'|password\s+text/i);
 });
 
+test('login試行制限migrationはraw identifierを保存せず共有lockを保持する', async () => {
+  const sql = await readFile(resolve(backendRoot, 'db', 'migrations', '003_auth_login_protection.sql'), 'utf8');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS auth_login_attempts\b/);
+  for (const column of ['subject_hash','failed_count','window_started_at','locked_until']) assert.match(sql, new RegExp(`\\b${column}\\b`));
+  assert.doesNotMatch(sql, /login_id|email|password/i);
+});
+
 test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integrationEnabled ? false : 'TEST_DATABASE_URLとALLOW_DATABASE_RESET=trueが必要です' }, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
   const ssl = process.env.TEST_DATABASE_SSL === 'true';
   let pool = createPostgresPool({ connectionString, ssl, max:6 });
   await migrateDatabase({ pool });
-  await pool.query('TRUNCATE auth_users, photo_metadata, audit_logs, schedule_history, workflow_history, responses, cases, staff, rooms, properties RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE auth_login_attempts, auth_users, photo_metadata, audit_logs, schedule_history, workflow_history, responses, cases, staff, rooms, properties RESTART IDENTITY CASCADE');
   let provider = createPostgresProvider({ pool });
   let userStore = createPostgresUserStore({ pool });
   let worker;
@@ -95,6 +102,11 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     assert.equal(updated.version, 2);
     await assert.rejects(() => userStore.update(created.id, { active:false }, { expectedVersion:1 }), error => error.code === 'CONFLICT');
     await assert.rejects(() => userStore.create({ ...created, id:'auth-duplicate', passwordHash:credentials.passwordHash }), error => error.code === 'CONFLICT');
+    const attemptAt = Date.parse('2026-09-02T00:00:00.000Z');
+    for (let index = 0; index < 3; index += 1) {
+      await userStore.recordLoginFailure(`user:${created.id}`, { now:attemptAt + index, windowMs:60_000, lockMs:120_000, maxFailures:3 });
+    }
+    assert.equal(new Date((await userStore.getLoginAttempt(`user:${created.id}`)).lockedUntil).getTime() > attemptAt, true);
 
     const workerCredentials = await hashPassword('postgres-worker-password');
     const storedWorker = await userStore.create({
@@ -187,6 +199,7 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     const authUser = await userStore.findByIdentifier('postgres-admin');
     assert.equal(authUser.displayName, '永続管理者');
     assert.equal(authUser.version, 2);
+    assert.equal((await userStore.getLoginAttempt('user:auth-postgres-admin')).failedCount, 3);
     const authWorker = await userStore.findByIdentifier('postgres-worker');
     assert.equal(authWorker.staffId, 'staff-worker-a');
   });

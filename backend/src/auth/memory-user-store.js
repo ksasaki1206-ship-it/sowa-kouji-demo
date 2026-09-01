@@ -6,6 +6,7 @@ const normalized = value => String(value || '').trim().toLowerCase();
 
 export function createMemoryUserStore(seed = []) {
   const users = clone(seed);
+  const loginAttempts = new Map();
   const duplicate = (candidate, ignoredId = '') => users.some(user => user.id !== ignoredId && (
     normalized(user.loginId) === normalized(candidate.loginId) ||
     (candidate.email && user.email && normalized(user.email) === normalized(candidate.email))
@@ -35,6 +36,27 @@ export function createMemoryUserStore(seed = []) {
       users[index] = updated;
       return clone(updated);
     },
+    async getLoginAttempt(subject) { return clone(loginAttempts.get(String(subject)) || null); },
+    async recordLoginFailure(subject, { now, windowMs, lockMs, maxFailures }) {
+      const key = String(subject);
+      const at = new Date(now);
+      const current = loginAttempts.get(key);
+      let failedCount = 1;
+      let windowStartedAt = at;
+      let lockedUntil = null;
+      if (current?.lockedUntil && new Date(current.lockedUntil) > at) {
+        return clone(current);
+      }
+      if (current && at.getTime() - new Date(current.windowStartedAt).getTime() < windowMs) {
+        failedCount = Number(current.failedCount) + 1;
+        windowStartedAt = new Date(current.windowStartedAt);
+      }
+      if (failedCount >= maxFailures) lockedUntil = new Date(at.getTime() + lockMs);
+      const next = { failedCount, windowStartedAt:windowStartedAt.toISOString(), lockedUntil:lockedUntil?.toISOString() || null, updatedAt:at.toISOString() };
+      loginAttempts.set(key, next);
+      return clone(next);
+    },
+    async clearLoginFailures(subject) { loginAttempts.delete(String(subject)); },
     async close() {}
   };
   return Object.freeze(assertAuthUserStore(store));

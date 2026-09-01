@@ -189,7 +189,18 @@ GitHub Pagesの既定local modeと従来のデモ認証を維持しつつ、HTTP
 - production起動時の固定admin自動生成を避けるone-time bootstrap CLI
 - development mockは維持するがproductionでは無効
 
-実Identity Platform/Firebase接続、Cloud Run deploy、GitHub Pagesのproduction Backend切替はまだ行っていません。正式HTTP modeではIdentity SDK adapterが必要で、HTTP失敗時にlocalStorageへ自動fallbackしません。詳細なAPI、環境変数、初期admin手順、Google Cloud側の残作業は `backend/README.md` と `backend/openapi.yaml` を参照してください。
+HTTP失敗時にlocalStorageへ自動fallbackしません。詳細なAPI、環境変数、初期admin手順、Google Cloud側の残作業は `backend/README.md` と `backend/openapi.yaml` を参照してください。
+
+## 第4-B3B-1弾のIdentity Platform接続準備
+
+- BackendへFirebase Admin SDK adapterを追加し、Cloud RunではApplication Default Credentialsを利用
+- `GET /api/v1/auth/config` からFirebase Web用の公開設定だけを返し、実API keyは環境変数から注入
+- Frontendは公式Firebase Web SDKをadapter内で遅延読込し、custom token交換、ID token refresh、signOutへ対応
+- PostgreSQLのhash化subjectを使い、複数instanceで共有できるlogin失敗windowと一時lockを追加
+- `DATABASE_URL` を維持しながらCloud SQL `/cloudsql/<INSTANCE_CONNECTION_NAME>` socket設定へ対応
+- production fake認証拒否、DB userのactive/role/staffId再取得、完全一致CORSを維持
+
+GitHub Pagesは引き続きlocal modeが既定です。Cloud Run deploy、IAM変更、Secret Manager実登録、GitHub Pagesのproduction Backend切替は行っていません。Firebase Web API keyは公開client設定ですが、Authentication専用としrepositoryへ実値を置きません。
 
 ## データアクセス層
 

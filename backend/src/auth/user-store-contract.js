@@ -1,4 +1,7 @@
-const REQUIRED_METHODS = Object.freeze(['list','get','findByIdentifier','create','update']);
+const REQUIRED_METHODS = Object.freeze([
+  'list','get','findByIdentifier','create','update',
+  'getLoginAttempt','recordLoginFailure','clearLoginFailures'
+]);
 
 export function assertAuthUserStore(store) {
   for (const method of REQUIRED_METHODS) {

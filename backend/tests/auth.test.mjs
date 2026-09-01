@@ -60,6 +60,12 @@ const login = async (identifier, password = PASSWORD) => {
 };
 
 test('正式認証のloginId/email・password・Bearer境界', async t => {
+  await t.test('公開auth configはfake modeで秘密情報を返さない', async () => {
+    const result = await request('/api/v1/auth/config');
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.payload.data, { configured:false, provider:'fake' });
+    assert.doesNotMatch(JSON.stringify(result.payload), /password|privateKey|credential/i);
+  });
   await t.test('loginIdとemailのどちらでもログインでき、秘密fieldを返さない', async () => {
     for (const identifier of ['admin01','ADMIN@EXAMPLE.TEST']) {
       const result = await login(identifier);

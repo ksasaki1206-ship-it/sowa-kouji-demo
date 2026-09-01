@@ -10,7 +10,7 @@ assert.match(source, /^openapi: 3\.1\.0$/m);
 assert.match(source, /^servers:\s*\r?\n\s+- url: https:\/\/api\.example\.invalid\/api\/v1$/m);
 
 const paths = [
-  '/health', '/auth/login', '/auth/me', '/auth/logout', '/auth/password', '/users', '/users/{id}', '/users/{id}/password-reset',
+  '/health', '/auth/config', '/auth/login', '/auth/me', '/auth/logout', '/auth/password', '/users', '/users/{id}', '/users/{id}/password-reset',
   '/cases', '/cases/{caseId}', '/properties', '/properties/{id}',
   '/rooms', '/rooms/{id}', '/staff', '/staff/{id}', '/responses',
   '/responses/{id}', '/audit', '/cases/{caseId}/workflow-history',

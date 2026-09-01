@@ -1,7 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
+import { loadDatabasePoolConfig } from '../config.js';
+import { createPostgresPool } from '../providers/postgres-provider.js';
 
 const defaultMigrationsDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'migrations');
 
@@ -34,9 +35,10 @@ export async function migrateDatabase({ pool, migrationsDirectory = defaultMigra
 }
 
 async function main() {
-  const databaseUrl = String(process.env.DATABASE_URL || '').trim();
-  if (!databaseUrl) throw new Error('DATABASE_URLを指定してください。');
-  const pool = new pg.Pool({ connectionString:databaseUrl, ssl:String(process.env.DATABASE_SSL || 'false') === 'true' ? { rejectUnauthorized:true } : false });
+  const pool = createPostgresPool({
+    poolConfig:loadDatabasePoolConfig(process.env, { required:true }),
+    ssl:String(process.env.DATABASE_SSL || 'false') === 'true'
+  });
   try {
     const files = await migrateDatabase({ pool });
     console.log(`database migrations ready (${files.length})`);

@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Sowa Kouji API
   version: v1
-  description: memory / PostgreSQL providerで共通利用するAPI契約。第4-B3Aでは正式認証境界を追加し、実Identity Platform接続と写真binary共有は後工程。
+  description: memory / PostgreSQL providerで共通利用するAPI契約。第4-B3B-1ではFirebase Identity Platform接続境界と公開Web設定を追加。写真binary共有は後工程。
 servers:
   - url: https://api.example.invalid/api/v1
 security:
@@ -15,6 +15,20 @@ paths:
       summary: 稼働状態
       responses:
         '200': { $ref: '#/components/responses/Success' }
+  /auth/config:
+    get:
+      security: []
+      summary: Firebase Web SDK初期化に必要な公開設定だけを返す
+      responses:
+        '200':
+          description: 公開client設定
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/AuthClientConfig' }
   /auth/login:
     post:
       security: []
@@ -340,6 +354,16 @@ components:
               version: { type: integer, minimum: 1 }
             additionalProperties: true
   schemas:
+    AuthClientConfig:
+      type: object
+      additionalProperties: false
+      required: [configured, provider]
+      properties:
+        configured: { type: boolean }
+        provider: { type: string, enum: [firebase, fake, unconfigured] }
+        apiKey: { type: string, description: Firebase Authentication Web SDK用の公開API key }
+        authDomain: { type: string }
+        projectId: { type: string }
     LoginRequest:
       type: object
       additionalProperties: false

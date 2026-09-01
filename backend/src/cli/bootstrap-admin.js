@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hashPassword } from '../auth/password-service.js';
 import { createPostgresUserStore } from '../auth/postgres-user-store.js';
+import { loadDatabasePoolConfig } from '../config.js';
 
 export async function bootstrapInitialAdmin({ userStore, loginId, email = null, displayName, password }) {
   if ((await userStore.list()).some(user => user.role === 'admin' && user.active === true)) throw new Error('有効なadminが既に存在するためbootstrapを中止しました。');
@@ -27,9 +28,10 @@ async function readBootstrapPassword(env = process.env, input = process.stdin) {
 }
 
 async function main() {
-  const databaseUrl = String(process.env.DATABASE_URL || '').trim();
-  if (!databaseUrl) throw new Error('DATABASE_URLが必要です。');
-  const userStore = createPostgresUserStore({ connectionString:databaseUrl, ssl:String(process.env.DATABASE_SSL || 'false') === 'true' });
+  const userStore = createPostgresUserStore({
+    poolConfig:loadDatabasePoolConfig(process.env, { required:true }),
+    ssl:String(process.env.DATABASE_SSL || 'false') === 'true'
+  });
   try {
     const password = await readBootstrapPassword();
     const user = await bootstrapInitialAdmin({
