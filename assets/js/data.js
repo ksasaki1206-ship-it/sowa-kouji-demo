@@ -1,4 +1,4 @@
-import { USERS } from './auth.js?v=20260901-17';
+import { USERS } from './auth.js?v=20260901-18';
 
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
@@ -22,6 +22,19 @@ export const INITIAL_PROPERTIES = Object.freeze([
   { id:'property-002', name:'△△ハイツ', address:'東京都△△区△△町3-4-5', managementCompany:'△△不動産', ownerName:'', parkingInfo:'', accessInfo:'', commonNote:'', active:true },
   { id:'property-003', name:'□□コーポ', address:'埼玉県□□市□□1-1-1', managementCompany:'□□管理', ownerName:'', parkingInfo:'1台利用可', accessInfo:'', commonNote:'', active:true }
 ]);
+export const normalizeRoomNumber = value => String(value || '')
+  .trim()
+  .replace(/[０-９]/g, character => String.fromCharCode(character.charCodeAt(0) - 0xFEE0))
+  .replace(/\s*号室\s*$/, '')
+  .replace(/(\d)[\s\u3000]+(?=\d)/g, '$1')
+  .trim();
+export const INITIAL_ROOMS = Object.freeze([
+  { id:'room-001', propertyId:'property-001', roomNumber:'101号室', normalizedRoomNumber:'101', active:true, commonNote:'' },
+  { id:'room-002', propertyId:'property-001', roomNumber:'102号室', normalizedRoomNumber:'102', active:true, commonNote:'' },
+  { id:'room-003', propertyId:'property-002', roomNumber:'201号室', normalizedRoomNumber:'201', active:true, commonNote:'' },
+  { id:'room-004', propertyId:'property-002', roomNumber:'202号室', normalizedRoomNumber:'202', active:true, commonNote:'' },
+  { id:'room-005', propertyId:'property-003', roomNumber:'301号室', normalizedRoomNumber:'301', active:true, commonNote:'' }
+]);
 export const PHOTO_GROUPS = { survey: '現調写真', before: '施工前', during: '施工中', after: '施工後' };
 
 const dateKey = (offset = 0) => {
@@ -31,13 +44,14 @@ const dateKey = (offset = 0) => {
 };
 
 const caseData = (data) => ({
-  id: '', propertyId: '', property: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
+  id: '', propertyId: '', property: '', roomId: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
   surveyStaff: '未定', surveyStaffId: '', surveyAt: '', surveyDurationMinutes: DEFAULT_DURATIONS.survey,
   workStaff: '未定', workStaffId: '', workAt: '', workDurationMinutes: DEFAULT_DURATIONS.work,
   materialOrderedAt: '', materialDeliveryAt: '', materialReceivedAt: '',
   supplier: '', materialNote: '', estimateAmount: 0, note: '', nextActionOverride: '', residentResponseId: '', workflowHistory: [], photos: { survey: [], before: [], during: [], after: [] }, photoMetadata: { survey: [], before: [], during: [], after: [] },
   ...data,
-  propertyId:data.propertyId || INITIAL_PROPERTIES.find(item => item.name === data.property)?.id || ''
+  propertyId:data.propertyId || INITIAL_PROPERTIES.find(item => item.name === data.property)?.id || '',
+  roomId:data.roomId || INITIAL_ROOMS.find(item => item.propertyId === (data.propertyId || INITIAL_PROPERTIES.find(property => property.name === data.property)?.id) && item.normalizedRoomNumber === normalizeRoomNumber(data.room))?.id || ''
 });
 
 export function createInitialState() {
@@ -46,6 +60,7 @@ export function createInitialState() {
     currentUser: USERS[0],
     staff: INITIAL_STAFF.map(item => ({ ...item })),
     properties: INITIAL_PROPERTIES.map(item => ({ ...item, createdAt, updatedAt:createdAt })),
+    rooms: INITIAL_ROOMS.map(item => ({ ...item, createdAt, updatedAt:createdAt })),
     auditLogs: [
       { id: 'a1', at: new Date().toISOString(), user: '事務所', property: '○○マンション', room: '101号室', caseId: 'c1', detail: 'デモ案件を登録' }
     ],
@@ -127,6 +142,55 @@ function migrateProperties(state) {
   });
   state.properties = properties;
 }
+const legacyRoomId = (propertyId, normalizedRoomNumber) => `room-legacy-${Array.from(`${propertyId}|${normalizedRoomNumber}`).reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0, 13).toString(36)}`;
+const normalizeRoom = (item, index, now) => {
+  const roomNumber = String(item?.roomNumber || '').trim();
+  return {
+    id:String(item?.id || legacyRoomId(String(item?.propertyId || ''), normalizeRoomNumber(roomNumber) || `room-${index}`)),
+    propertyId:String(item?.propertyId || ''),
+    roomNumber,
+    normalizedRoomNumber:normalizeRoomNumber(item?.normalizedRoomNumber || roomNumber),
+    active:item?.active !== false,
+    commonNote:String(item?.commonNote || '').trim(),
+    createdAt:item?.createdAt || now,
+    updatedAt:item?.updatedAt || item?.createdAt || now
+  };
+};
+
+function migrateRooms(state) {
+  const now = new Date().toISOString();
+  const rooms = [];
+  const roomKeys = new Map();
+  const addRoom = raw => {
+    const item = normalizeRoom(raw, rooms.length, now);
+    if (!item.propertyId || !item.roomNumber || !item.normalizedRoomNumber) return null;
+    const key = `${item.propertyId}\u0000${item.normalizedRoomNumber}`;
+    const existing = roomKeys.get(key);
+    if (existing) {
+      if (!existing.commonNote && item.commonNote) existing.commonNote = item.commonNote;
+      if (item.active === false) existing.active = false;
+      return existing;
+    }
+    const baseId = item.id;
+    let suffix = 2;
+    while (rooms.some(room => room.id === item.id)) item.id = `${baseId}-${suffix++}`;
+    rooms.push(item);
+    roomKeys.set(key, item);
+    return item;
+  };
+  (Array.isArray(state.rooms) ? state.rooms : []).forEach(addRoom);
+  state.cases.forEach(item => {
+    const normalized = normalizeRoomNumber(item.room);
+    if (!item.propertyId || !normalized) {
+      item.roomId = '';
+      return;
+    }
+    const saved = rooms.find(room => room.id === item.roomId && room.propertyId === item.propertyId);
+    const room = saved || roomKeys.get(`${item.propertyId}\u0000${normalized}`) || addRoom({ propertyId:item.propertyId, roomNumber:String(item.room || '').trim() });
+    item.roomId = room?.id || '';
+  });
+  state.rooms = rooms;
+}
 const dataUrlMime = source => /^data:([^;,]+)/.exec(source || '')?.[1] || 'image/jpeg';
 const dataUrlSize = source => Math.max(0, Math.floor(((source || '').split(',')[1]?.length || 0) * .75));
 const normalizePhotoMetadata = (metadata = {}, photos, caseId) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(group => [group, photos[group].map((source, index) => {
@@ -170,6 +234,7 @@ export function migrateState(raw) {
     state.cases.push(added);
   });
   migrateProperties(state);
+  migrateRooms(state);
   const savedStaff = Array.isArray(state.staff) ? state.staff.map(normalizeStaff).filter(item => item.name) : [];
   INITIAL_STAFF.forEach(defaultStaff => {
     if (!savedStaff.some(item => item.id === defaultStaff.id || item.name === defaultStaff.name)) savedStaff.push({ ...defaultStaff });
@@ -201,6 +266,10 @@ export function createCase() { return caseData({ id: `c${Date.now()}` }); }
 export function createProperty() {
   const now = new Date().toISOString();
   return normalizeProperty({ id:`property-${Date.now()}-${Math.random().toString(16).slice(2)}`, active:true, createdAt:now, updatedAt:now }, 0, now);
+}
+export function createRoom(propertyId = '') {
+  const now = new Date().toISOString();
+  return normalizeRoom({ id:`room-${Date.now()}-${Math.random().toString(16).slice(2)}`, propertyId, active:true, createdAt:now, updatedAt:now }, 0, now);
 }
 export function clone(value) { return JSON.parse(JSON.stringify(value)); }
 export function todayKey() { return dateKey(0); }

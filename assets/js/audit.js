@@ -1,4 +1,4 @@
-import { auditRepository } from './repositories.js?v=20260901-17';
+import { auditRepository } from './repositories.js?v=20260901-18';
 
 const LABELS = {
   property:'物件名', room:'部屋番号', address:'住所', owner:'管理会社 / オーナー', status:'ステータス',

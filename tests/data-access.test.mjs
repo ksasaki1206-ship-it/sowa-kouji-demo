@@ -26,14 +26,17 @@ const legacy = migrateState({
     workflowHistory:[{ step:'inquiry', completedAt:'2026-08-01T08:00:00.000Z', completedBy:'事務所' }],
     photos:{ survey:['data:image/png;base64,AAAA'] }
   },{
-    id:'legacy-2', property:' 既存物件　 ', room:'102号室', status:'完了', address:'既存住所B', owner:'既存管理B'
+    id:'legacy-2', property:' 既存物件　 ', room:'１０１号室', status:'完了', address:'既存住所B', owner:'既存管理B'
   },{
     id:'legacy-3', property:'〇〇物件', room:'101号室', status:'問い合わせ'
+  },{
+    id:'legacy-4', property:'既存物件', room:'101 号室', status:'問い合わせ'
   }]
 });
 const legacyCase = legacy.cases.find(item => item.id === 'legacy-1');
 const samePropertyCase = legacy.cases.find(item => item.id === 'legacy-2');
 const differentPropertyCase = legacy.cases.find(item => item.id === 'legacy-3');
+const spacedRoomCase = legacy.cases.find(item => item.id === 'legacy-4');
 assert.equal(legacyCase.photos.survey.length, 1);
 assert.equal(legacyCase.photoMetadata.survey.length, 1);
 assert.equal(legacyCase.photoMetadata.survey[0].storageProvider, 'localStorage');
@@ -51,6 +54,12 @@ assert.equal(Boolean(legacyCase.propertyId), true);
 assert.equal(legacyCase.propertyId, samePropertyCase.propertyId);
 assert.notEqual(legacyCase.propertyId, differentPropertyCase.propertyId);
 assert.equal(samePropertyCase.property, ' 既存物件　 ');
+assert.equal(samePropertyCase.room, '１０１号室');
+assert.equal(spacedRoomCase.room, '101 号室');
+assert.equal(legacyCase.roomId, samePropertyCase.roomId);
+assert.equal(legacyCase.roomId, spacedRoomCase.roomId);
+assert.notEqual(legacyCase.roomId, differentPropertyCase.roomId);
+assert.equal(legacy.rooms.find(item => item.id === legacyCase.roomId).normalizedRoomNumber, '101');
 const migratedProperty = legacy.properties.find(item => item.id === legacyCase.propertyId);
 assert.equal(migratedProperty.name, '既存物件');
 assert.equal(migratedProperty.address, '既存住所A');
@@ -61,9 +70,16 @@ const access = createLocalDataAccess();
 const state = access.snapshot.load();
 assert.equal(access.adapter, 'localStorage');
 assert.equal(access.cases.get('legacy-1').property, '既存物件');
+assert.equal(access.rooms.getByPropertyRoom(legacyCase.propertyId, '１０１ 号室').id, legacyCase.roomId);
+const addedRoom = { id:'room-test-201', propertyId:legacyCase.propertyId, roomNumber:'201号室', normalizedRoomNumber:'201', active:true, commonNote:'搬入口利用', createdAt:'2026-09-01', updatedAt:'2026-09-01' };
+assert.equal(access.rooms.create(addedRoom).id, 'room-test-201');
+assert.equal(access.rooms.create({ ...addedRoom, id:'room-duplicate', roomNumber:'２０１ 号室' }), null);
+access.rooms.update('room-test-201', { commonNote:'鍵は管理室', active:false });
+assert.equal(access.rooms.get('room-test-201').commonNote, '鍵は管理室');
+assert.equal(access.rooms.listByProperty(legacyCase.propertyId).some(item => item.id === 'room-test-201'), true);
 
 const createdCase = {
-  id:'test-case', propertyId:legacyCase.propertyId, property:'テスト物件', room:'201号室', workflowHistory:[],
+  id:'test-case', propertyId:legacyCase.propertyId, property:'テスト物件', roomId:'room-test-201', room:'201号室', workflowHistory:[],
   photos:{ survey:[], before:[], during:[], after:[] },
   photoMetadata:{ survey:[], before:[], during:[], after:[] }
 };
@@ -140,7 +156,9 @@ assert.equal(reset.cases.some(item => item.id === 'test-case'), false);
 assert.equal(Boolean(reset.cases.find(item => item.id === 'c1').surveyStaffId), true);
 assert.equal(Boolean(reset.cases.find(item => item.id === 'c5').workStaffId), true);
 assert.equal(reset.properties.length, 3);
+assert.equal(reset.rooms.length, 5);
 assert.equal(reset.cases.find(item => item.id === 'c1').propertyId, 'property-001');
+assert.equal(reset.cases.find(item => item.id === 'c1').roomId, 'room-001');
 assert.equal(access.snapshot.current(), reset);
 
 console.log('data-access tests: ok');

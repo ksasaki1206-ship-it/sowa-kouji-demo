@@ -1,5 +1,5 @@
-import { PHOTO_GROUPS, normalizePropertyName } from './data.js?v=20260901-17';
-import { USER_DEFINITIONS } from './auth.js?v=20260901-17';
+import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-18';
+import { USER_DEFINITIONS } from './auth.js?v=20260901-18';
 
 const array = (state, key) => Array.isArray(state?.[key]) ? state[key] : [];
 const matchId = (item, id) => item?.id === id;
@@ -14,7 +14,8 @@ export const caseRepository = Object.freeze({
     return this.list(state).find(item => matchId(item, id)) || null;
   },
   getByPropertyRoom(state, property, room) {
-    return this.list(state).find(item => item.property === property && item.room === room) || null;
+    const normalized = normalizeRoomNumber(room);
+    return this.list(state).find(item => item.property === property && (normalized ? normalizeRoomNumber(item.room) === normalized : item.room === room)) || null;
   },
   create(state, item) {
     this.list(state).push(item);
@@ -158,6 +159,40 @@ export const propertyRepository = Object.freeze({
   }
 });
 
+export const roomRepository = Object.freeze({
+  list(state) {
+    return array(state, 'rooms');
+  },
+  get(state, id) {
+    return this.list(state).find(item => matchId(item, id)) || null;
+  },
+  listByProperty(state, propertyId) {
+    return this.list(state).filter(item => item.propertyId === propertyId);
+  },
+  getByPropertyRoom(state, propertyId, roomNumber) {
+    const normalized = normalizeRoomNumber(roomNumber);
+    return this.listByProperty(state, propertyId).find(item => item.normalizedRoomNumber === normalized) || null;
+  },
+  create(state, item) {
+    const normalized = normalizeRoomNumber(item?.roomNumber);
+    if (!item?.id || !item?.propertyId || !normalized || this.get(state, item.id) || this.getByPropertyRoom(state, item.propertyId, item.roomNumber)) return null;
+    item.normalizedRoomNumber = normalized;
+    this.list(state).push(item);
+    return item;
+  },
+  update(state, id, changes) {
+    const item = this.get(state, id);
+    if (!item) return null;
+    const roomNumber = Object.hasOwn(changes, 'roomNumber') ? changes.roomNumber : item.roomNumber;
+    const normalized = normalizeRoomNumber(roomNumber);
+    if (!normalized) return null;
+    const duplicate = this.listByProperty(state, item.propertyId).find(room => room.id !== id && room.normalizedRoomNumber === normalized);
+    if (duplicate) return null;
+    Object.assign(item, changes, { normalizedRoomNumber:normalized });
+    return item;
+  }
+});
+
 function ensurePhotoCollections(item) {
   item.photos = item.photos && typeof item.photos === 'object' ? item.photos : {};
   item.photoMetadata = item.photoMetadata && typeof item.photoMetadata === 'object' ? item.photoMetadata : {};
@@ -234,5 +269,6 @@ export const repositories = Object.freeze({
   users:userRepository,
   staff:staffRepository,
   properties:propertyRepository,
+  rooms:roomRepository,
   photos:photoRepository
 });

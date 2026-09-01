@@ -1,5 +1,5 @@
-import { DEFAULT_DURATIONS, STATUSES } from './data.js?v=20260901-17';
-import { auditRepository, caseRepository, responseRepository, workflowRepository } from './repositories.js?v=20260901-17';
+import { DEFAULT_DURATIONS, STATUSES, normalizeRoomNumber } from './data.js?v=20260901-18';
+import { auditRepository, caseRepository, responseRepository, workflowRepository } from './repositories.js?v=20260901-18';
 
 const indexOfStatus = status => Math.max(0, STATUSES.indexOf(status));
 const dateOnly = value => value ? value.slice(0, 10) : '';
@@ -66,12 +66,28 @@ export function findScheduleConflicts(state, candidateItem, excludeCaseId = cand
 
 export function findDuplicateCases(state, candidateItem, excludeCaseId = candidateItem.id) {
   const propertyId = String(candidateItem?.propertyId || '');
-  const room = String(candidateItem?.room || '').trim();
-  if (!propertyId || !room) return [];
+  const roomId = String(candidateItem?.roomId || '');
+  const normalizedRoom = normalizeRoomNumber(candidateItem?.room);
+  if (!propertyId || (!roomId && !normalizedRoom)) return [];
   return caseRepository.list(state).filter(item => item.id !== excludeCaseId
     && item.propertyId === propertyId
-    && String(item.room || '').trim() === room
+    && (roomId && item.roomId ? item.roomId === roomId : normalizeRoomNumber(item.room) === normalizedRoom)
     && item.status !== '完了');
+}
+
+export function selectableRooms(rooms, propertyId, currentRoomId = '') {
+  return (Array.isArray(rooms) ? rooms : []).filter(room => room.propertyId === propertyId && (room.active || room.id === currentRoomId));
+}
+
+export function groupCasesByRoom(cases) {
+  const groups = new Map();
+  (Array.isArray(cases) ? cases : []).forEach(item => {
+    const fallback = normalizeRoomNumber(item.room) || String(item.room || '').trim();
+    const key = `${item.propertyId || item.property}\u0000${item.roomId || fallback || item.id}`;
+    if (!groups.has(key)) groups.set(key, { key, propertyId:item.propertyId || '', roomId:item.roomId || '', normalizedRoomNumber:fallback, cases:[] });
+    groups.get(key).cases.push(item);
+  });
+  return [...groups.values()];
 }
 
 export function responseForCase(state, item) {

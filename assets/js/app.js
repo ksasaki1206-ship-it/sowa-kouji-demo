@@ -1,8 +1,8 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, normalizePropertyName, clone, todayKey, plusDays } from './data.js?v=20260901-17';
-import { dataAccess } from './data-access.js?v=20260901-17';
-import { addAudit, auditChanges } from './audit.js?v=20260901-17';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-17';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-17';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-18';
+import { dataAccess } from './data-access.js?v=20260901-18';
+import { addAudit, auditChanges } from './audit.js?v=20260901-18';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-18';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-18';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;
@@ -22,6 +22,8 @@ const fmtMoney = value => Number(value || 0).toLocaleString('ja-JP') + '円';
 const datePart = value => value ? value.slice(0, 10) : '';
 const propertyList = () => dataAccess.properties.list();
 const propertyById = id => id ? dataAccess.properties.get(id) : null;
+const roomList = () => dataAccess.rooms.list();
+const roomById = id => id ? dataAccess.rooms.get(id) : null;
 const properties = () => propertyList().map(item => item.name).filter(Boolean).sort((a,b) => a.localeCompare(b, 'ja'));
 const caseById = id => dataAccess.cases.get(id);
 const responseForCase = c => workflowResponseForCase(state, c);
@@ -77,6 +79,22 @@ function updateCasePropertyInfo(fillLegacy = false) {
   }
 }
 
+function updateCaseRoom() {
+  const form = $('caseForm');
+  const room = roomById(form.elements.roomId.value);
+  form.elements.room.value = room?.roomNumber || '';
+}
+
+function populateCaseRoomSelect(source = {}) {
+  const form = $('caseForm');
+  const propertyId = form.elements.propertyId.value;
+  const selected = roomById(source.roomId) || dataAccess.rooms.getByPropertyRoom(propertyId, source.room);
+  const rooms = selectableRooms(roomList(), propertyId, selected?.id || '').sort((a,b) => a.roomNumber.localeCompare(b.roomNumber, 'ja', { numeric:true }));
+  form.elements.roomId.innerHTML = '<option value="">部屋を選択</option>' + rooms.map(room => `<option value="${esc(room.id)}">${esc(room.roomNumber)}${room.active ? '' : '（無効・既存）'}</option>`).join('');
+  form.elements.roomId.value = selected && rooms.some(room => room.id === selected.id) ? selected.id : '';
+  updateCaseRoom();
+}
+
 function updateEndPreviews() {
   const form = $('caseForm');
   $('surveyEndPreview').textContent = `終了予定：${formatPlan(form.elements.surveyAt.value, form.elements.surveyDurationMinutes.value, false)}`;
@@ -118,7 +136,9 @@ function ensurePhase2Ui() {
   $('staffAdminButton').insertAdjacentHTML('afterend', '<button id="propertyButton" class="btn logout hidden" type="button">物件情報</button>');
   const propertyLabel = $('caseForm').elements.property.closest('label');
   propertyLabel.innerHTML = '<span>物件</span><select class="select" name="propertyId" required></select><input type="hidden" name="property">';
-  propertyLabel.closest('.two').insertAdjacentHTML('afterend', '<div id="casePropertyInfo" class="property-reference"></div><button id="newPropertyFromCase" class="btn property-create-link hidden" type="button">＋ 新しい物件を登録</button>');
+  const roomLabel = $('caseForm').elements.room.closest('label');
+  roomLabel.innerHTML = '<span>部屋</span><select class="select" name="roomId" required></select><input type="hidden" name="room">';
+  propertyLabel.closest('.two').insertAdjacentHTML('afterend', '<div id="casePropertyInfo" class="property-reference"></div><div class="case-master-actions"><button id="newPropertyFromCase" class="btn property-create-link hidden" type="button">＋ 新しい物件を登録</button><button id="newRoomFromCase" class="btn property-create-link hidden" type="button">＋ 未登録の部屋を追加</button></div>');
   document.body.insertAdjacentHTML('beforeend', `<div id="propertyAdminModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="propertyAdminTitle"><div class="modalbox property-admin-modal"><div class="modalhead"><div id="propertyAdminTitle" class="big">物件情報</div><button id="closePropertyAdmin" class="btn" type="button">閉じる</button></div><p class="muted">物件共通情報と、この物件に紐づく案件を確認できます。</p><section id="propertyFormSection"><form id="propertyForm" class="form property-form"><input type="hidden" name="id"><div class="two"><label><span>物件名</span><input class="input" name="name" required></label><label><span>住所</span><input class="input" name="address"></label></div><div class="two"><label><span>管理会社</span><input class="input" name="managementCompany"></label><label><span>オーナー名</span><input class="input" name="ownerName"></label></div><div class="two"><label><span>駐車情報</span><input class="input" name="parkingInfo"></label><label><span>入館／鍵／アクセス情報</span><input class="input" name="accessInfo"></label></div><label><span>物件共通備考</span><textarea class="textarea" name="commonNote"></textarea></label><label class="confirm-check"><input type="checkbox" name="active" checked><span>有効な物件として使用する</span></label><div class="actions"><button class="btn primary" type="submit">物件を保存</button><button id="clearPropertyForm" class="btn" type="button">新規入力に戻す</button></div><div id="propertyFormError" class="form-error hidden" role="alert"></div></form></section><div id="propertyAdminList" class="property-admin-list"></div></div></div><div id="propertyDetailModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="propertyDetailTitle"><div class="modalbox property-detail-modal"><div class="modalhead"><div id="propertyDetailTitle" class="big">物件詳細</div><button id="closePropertyDetail" class="btn" type="button">閉じる</button></div><div id="propertyDetailContent"></div></div></div><div id="duplicateCaseModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="duplicateCaseTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="duplicateCaseTitle" class="big">⚠ この部屋には進行中の案件があります</div></div><div id="duplicateCaseDetails" class="conflict-details"></div><p>このまま新しい案件を登録しますか？</p><div class="warning-actions"><button id="duplicateCaseReview" class="btn primary" type="button">既存案件を確認</button><button id="duplicateCaseProceed" class="btn danger" type="button">このまま登録</button><button id="duplicateCaseCancel" class="btn" type="button">キャンセル</button></div></div></div>`);
 }
 
@@ -360,9 +380,11 @@ function openCaseModal(c) {
   const source = c || createCase();
   ['property','room','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
   populateCasePropertySelect(source);
+  populateCaseRoomSelect(source);
   populateAssignmentSelect(form.elements.surveyStaffId, 'canSurvey', source.surveyStaffId, source.surveyStaff);
   populateAssignmentSelect(form.elements.workStaffId, 'canWork', source.workStaffId, source.workStaff);
   $('newPropertyFromCase').classList.toggle('hidden', !can(sessionRole, 'manageProperties'));
+  $('newRoomFromCase').classList.toggle('hidden', !can(sessionRole, 'manageRooms'));
   updateEndPreviews();
   form.elements.propertyId.focus();
 }
@@ -379,10 +401,14 @@ function saveCaseForm(event) {
   const c = existing || createCase();
   const selectedProperty = propertyById(data.get('propertyId'));
   if (!selectedProperty) return notify('物件を選択してください。');
+  const selectedRoom = roomById(data.get('roomId'));
+  if (!selectedRoom || selectedRoom.propertyId !== selectedProperty.id) return notify('部屋を選択してください。');
   const keys = ['property','room','address','owner','status','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','nextActionOverride','note'];
   const values = Object.fromEntries(keys.map(key => [key, data.get(key) || '']));
   values.propertyId = selectedProperty.id;
   values.property = selectedProperty.name;
+  values.roomId = selectedRoom.id;
+  values.room = selectedRoom.roomNumber;
   values.estimateAmount = Number(data.get('estimateAmount') || 0);
   values.surveyDurationMinutes = Math.max(15, Number(data.get('surveyDurationMinutes') || DEFAULT_DURATIONS.survey));
   values.workDurationMinutes = Math.max(15, Number(data.get('workDurationMinutes') || DEFAULT_DURATIONS.work));
@@ -401,6 +427,7 @@ function saveCaseForm(event) {
     } else {
       dataAccess.cases.update(c.id, values);
       auditChanges(state, before, c);
+      if (before.roomId !== c.roomId) addAudit(state, c, `部屋マスタ紐付けを ${roomById(before.roomId)?.roomNumber || before.room || '未定'} → ${selectedRoom.roomNumber} に変更`);
     }
     if (ignoredConflicts.length) {
       const labels = [...new Set(ignoredConflicts.map(conflict => conflict.candidate.label))].join('・');
@@ -520,7 +547,26 @@ function monthDays() {
 
 function scheduleTable(cases, days) {
   const staffLabel = value => value && value !== '未定' ? value : '担当未定';
-  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><button class="schedule-room-link open-case" type="button" data-id="${esc(c.id)}" aria-label="${esc(`${c.property} ${c.room}の案件詳細`)}"><b>${esc(c.room)}</b><span>${esc(c.residentName || '未登録')}</span></button></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event survey open-case" data-id="${esc(c.id)}" aria-label="現調 ${esc(formatScheduleRange(c.surveyAt, c.surveyDurationMinutes))} ${esc(staffLabel(c.surveyStaff))}"><span>現調</span><time>${esc(formatScheduleRange(c.surveyAt, c.surveyDurationMinutes))}</time><small title="${esc(staffLabel(c.surveyStaff))}">${esc(staffLabel(c.surveyStaff))}</small></a>` : ''}${datePart(c.workAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event work open-case" data-id="${esc(c.id)}" aria-label="工事 ${esc(formatScheduleRange(c.workAt, c.workDurationMinutes))} ${esc(staffLabel(c.workStaff))}"><span>工事</span><time>${esc(formatScheduleRange(c.workAt, c.workDurationMinutes))}</time><small title="${esc(staffLabel(c.workStaff))}">${esc(staffLabel(c.workStaff))}</small></a>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const eventHtml = (c, type) => {
+    const survey = type === 'survey';
+    const at = survey ? c.surveyAt : c.workAt;
+    if (!at) return '';
+    const duration = survey ? c.surveyDurationMinutes : c.workDurationMinutes;
+    const staff = staffLabel(survey ? c.surveyStaff : c.workStaff);
+    const label = survey ? '現調' : '工事';
+    return `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event ${type} open-case" data-id="${esc(c.id)}" aria-label="${label} ${esc(formatScheduleRange(at, duration))} ${esc(staff)}"><span>${label}</span><time>${esc(formatScheduleRange(at, duration))}</time><small title="${esc(staff)}">${esc(staff)}</small></a>`;
+  };
+  const groups = groupCasesByRoom(cases).sort((a,b) => {
+    const left = roomById(a.roomId)?.roomNumber || a.cases[0]?.room || '';
+    const right = roomById(b.roomId)?.roomNumber || b.cases[0]?.room || '';
+    return left.localeCompare(right, 'ja', { numeric:true });
+  });
+  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${groups.map(group => {
+    const lead = group.cases.find(item => item.status !== '完了') || group.cases[0];
+    const displayRoom = roomById(group.roomId)?.roomNumber || lead.room || '部屋未登録';
+    const residents = [...new Set(group.cases.map(item => item.residentName).filter(Boolean))].join('・') || '未登録';
+    return `<tr><th class="room-head"><button class="schedule-room-link open-case" type="button" data-id="${esc(lead.id)}" aria-label="${esc(`${lead.property} ${displayRoom}の案件詳細`)}"><b>${esc(displayRoom)}</b><span>${esc(residents)}</span></button></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${group.cases.map(c => datePart(c.surveyAt) === d.key ? eventHtml(c, 'survey') : '').join('')}${group.cases.map(c => datePart(c.workAt) === d.key ? eventHtml(c, 'work') : '').join('')}</td>`).join('')}</tr>`;
+  }).join('')}</tbody></table>`;
 }
 
 function alignScheduleToToday(scroll) {
@@ -537,10 +583,11 @@ function renderSchedule() {
   const selectedProperties = select.value === 'all' ? props : props.filter(property => property.id === select.value);
   const selectedIds = new Set(selectedProperties.map(property => property.id));
   const cases = dataAccess.cases.list().filter(c => selectedIds.has(c.propertyId));
+  const roomGroups = groupCasesByRoom(cases);
   $('scheduleSummary').innerHTML = [
-    ['回答待ち', cases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length],
-    ['現調未確定', cases.filter(c => !c.surveyAt).length],
-    ['施工未確定', cases.filter(c => !c.workAt).length]
+    ['回答待ち', roomGroups.filter(group => group.cases.some(c => !responseForCase(c) && c.note.includes('回答待ち'))).length],
+    ['現調未確定', roomGroups.filter(group => group.cases.some(c => !c.surveyAt)).length],
+    ['施工未確定', roomGroups.filter(group => group.cases.some(c => !c.workAt)).length]
   ].map(([label,count]) => `<div class="summary"><span class="k">${label}</span><b>${count}</b><span class="muted">室</span></div>`).join('');
   const days = monthDays();
   const mobile = window.matchMedia('(max-width: 700px)').matches;
@@ -548,8 +595,9 @@ function renderSchedule() {
     const propertyCases = cases.filter(c => c.propertyId === property.id).sort((a,b) => a.room.localeCompare(b.room, 'ja', {numeric:true}));
     const waiting = propertyCases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length;
     const undecided = propertyCases.filter(c => !c.surveyAt || !c.workAt).length;
+    const roomCount = groupCasesByRoom(propertyCases).length;
     const open = !mobile || select.value !== 'all' || index === 0;
-    return `<details class="schedule-group" ${open ? 'open' : ''}><summary><span><b>${esc(property.name)}</b><span class="muted">${propertyCases.length}案件${property.active ? '' : ' ／ 無効'}</span></span><span class="group-status">${waiting ? `<span class="badge wait">回答待ち ${waiting}</span>` : ''}${undecided ? `<span class="badge">未確定 ${undecided}</span>` : ''}<span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="property-group-toolbar"><button class="btn open-property" type="button" data-id="${esc(property.id)}">物件情報</button></div><div class="schedule-scroll">${propertyCases.length ? scheduleTable(propertyCases, days) : '<div class="empty">案件はありません。</div>'}</div></details>`;
+    return `<details class="schedule-group" ${open ? 'open' : ''}><summary><span><b>${esc(property.name)}</b><span class="muted">${roomCount}室／${propertyCases.length}案件${property.active ? '' : ' ／ 無効'}</span></span><span class="group-status">${waiting ? `<span class="badge wait">回答待ち ${waiting}</span>` : ''}${undecided ? `<span class="badge">未確定 ${undecided}</span>` : ''}<span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="property-group-toolbar"><button class="btn open-property" type="button" data-id="${esc(property.id)}">物件情報</button></div><div class="schedule-scroll">${propertyCases.length ? scheduleTable(propertyCases, days) : '<div class="empty">案件はありません。</div>'}</div></details>`;
   }).join('') || '<div class="card empty">表示できる物件がありません。</div>';
   wireCaseLinks($('scheduleWrap'));
   $('scheduleWrap').querySelectorAll('.open-property').forEach(button => button.addEventListener('click', () => openPropertyDetail(button.dataset.id)));
@@ -946,9 +994,72 @@ function openPropertyDetail(id) {
   const property = propertyById(id);
   if (!property || sessionRole === 'worker') return;
   const cases = dataAccess.cases.list().filter(item => item.propertyId === property.id).sort((a,b) => a.room.localeCompare(b.room, 'ja', { numeric:true }));
-  const roomGroups = [...new Set(cases.map(item => item.room))];
+  const rooms = dataAccess.rooms.listByProperty(property.id).slice().sort((a,b) => Number(b.active) - Number(a.active) || a.roomNumber.localeCompare(b.roomNumber, 'ja', { numeric:true }));
+  const caseGroups = groupCasesByRoom(cases);
+  const editable = can(sessionRole, 'manageRooms');
   $('propertyDetailTitle').textContent = property.name;
-  $('propertyDetailContent').innerHTML = `<section class="property-detail-grid">${propertyReferenceHtml(property)}</section><section class="property-cases"><h2>この物件の案件</h2>${roomGroups.map(room => `<div class="property-room"><b>${esc(room || '部屋未登録')}</b>${cases.filter(item => item.room === room).map(item => `<button class="property-case-link" type="button" data-id="${esc(item.id)}"><span>${esc(item.status)}</span><small>${esc(item.residentName || '入居者未登録')} ／ 次：${esc(nextAction(item))}</small><b>›</b></button>`).join('')}</div>`).join('') || '<div class="empty">この物件の案件はありません。</div>'}</section>`;
+  const roomRows = rooms.map(room => `<article class="room-master-row ${room.active ? '' : 'inactive'}"><div><b>${esc(room.roomNumber)}</b>${room.active ? '' : '<span class="badge inactive-badge">無効</span>'}<small>${esc(room.commonNote || '共通備考なし')} ／ 案件 ${cases.filter(item => item.roomId === room.id).length}件</small></div>${editable ? `<div class="actions"><button class="btn edit-room" type="button" data-id="${esc(room.id)}">編集</button><button class="btn toggle-room ${room.active ? 'danger' : ''}" type="button" data-id="${esc(room.id)}">${room.active ? '無効化' : '有効化'}</button></div>` : ''}</article>`).join('') || '<div class="empty">部屋が登録されていません。</div>';
+  const roomForm = editable ? `<form id="roomForm" class="form room-form"><input type="hidden" name="id"><div class="two"><label><span>部屋番号</span><input class="input" name="roomNumber" required placeholder="例：101号室"></label><label><span>部屋共通備考</span><input class="input" name="commonNote" placeholder="鍵・入室時の注意など"></label></div><label class="confirm-check"><input type="checkbox" name="active" checked><span>新規案件で選択できる有効な部屋</span></label><div class="actions"><button class="btn primary" type="submit">部屋を保存</button><button id="clearRoomForm" class="btn" type="button">新規入力に戻す</button></div><div id="roomFormError" class="form-error hidden" role="alert"></div></form>` : '<p class="muted">部屋情報は管理者が編集できます。</p>';
+  const caseRows = caseGroups.map(group => {
+    const room = roomById(group.roomId);
+    const displayRoom = room?.roomNumber || group.cases[0]?.room || '部屋未登録';
+    return `<div class="property-room"><b>${esc(displayRoom)}</b>${group.cases.map(item => `<button class="property-case-link" type="button" data-id="${esc(item.id)}"><span>${esc(item.status)}</span><small>${esc(item.residentName || '入居者未登録')} ／ 次：${esc(nextAction(item))}</small><b>›</b></button>`).join('')}</div>`;
+  }).join('') || '<div class="empty">この物件の案件はありません。</div>';
+  $('propertyDetailContent').innerHTML = `<section class="property-detail-grid">${propertyReferenceHtml(property)}</section><section class="property-rooms"><div class="section-head"><h2>部屋マスタ</h2><span class="muted">${rooms.length}室</span></div>${roomForm}<div class="room-master-list">${roomRows}</div></section><section class="property-cases"><h2>この物件の案件</h2>${caseRows}</section>`;
+  const roomEditor = $('roomForm');
+  const resetRoomEditor = () => {
+    if (!roomEditor) return;
+    roomEditor.reset();
+    roomEditor.elements.id.value = '';
+    roomEditor.elements.active.checked = true;
+    setFormError('roomFormError', '');
+  };
+  roomEditor?.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!can(sessionRole, 'manageRooms')) return notify('この操作を行う権限がありません。');
+    const roomId = roomEditor.elements.id.value;
+    const existing = roomId ? roomById(roomId) : null;
+    const roomNumber = roomEditor.elements.roomNumber.value.trim();
+    const normalizedRoomNumber = normalizeRoomNumber(roomNumber);
+    if (!normalizedRoomNumber) return setFormError('roomFormError', '部屋番号を入力してください。');
+    const duplicate = rooms.find(room => room.id !== roomId && room.normalizedRoomNumber === normalizedRoomNumber);
+    if (duplicate) return setFormError('roomFormError', `「${duplicate.roomNumber}」と同じ部屋として登録済みです。`);
+    const now = new Date().toISOString();
+    const changes = { roomNumber, normalizedRoomNumber, commonNote:roomEditor.elements.commonNote.value.trim(), active:roomEditor.elements.active.checked, updatedAt:now };
+    if (existing) {
+      const before = clone(existing);
+      if (!dataAccess.rooms.update(existing.id, changes)) return setFormError('roomFormError', '部屋を更新できませんでした。');
+      const edited = before.roomNumber !== roomNumber || before.commonNote !== changes.commonNote;
+      if (edited) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${before.roomNumber}」を編集`);
+      if (before.active !== changes.active) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を${changes.active ? '有効化' : '無効化'}`);
+    } else {
+      const room = { ...createRoom(property.id), ...changes, propertyId:property.id, createdAt:now };
+      if (!dataAccess.rooms.create(room)) return setFormError('roomFormError', '部屋を追加できませんでした。');
+      addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を追加`);
+    }
+    persist(existing ? '部屋を更新しました。' : '部屋を追加しました。');
+    openPropertyDetail(property.id);
+  });
+  $('clearRoomForm')?.addEventListener('click', resetRoomEditor);
+  $('propertyDetailContent').querySelectorAll('.edit-room').forEach(button => button.addEventListener('click', () => {
+    const room = roomById(button.dataset.id);
+    if (!room || !roomEditor) return;
+    roomEditor.elements.id.value = room.id;
+    roomEditor.elements.roomNumber.value = room.roomNumber;
+    roomEditor.elements.commonNote.value = room.commonNote;
+    roomEditor.elements.active.checked = room.active;
+    roomEditor.elements.roomNumber.focus();
+  }));
+  $('propertyDetailContent').querySelectorAll('.toggle-room').forEach(button => button.addEventListener('click', () => {
+    if (!can(sessionRole, 'manageRooms')) return;
+    const room = roomById(button.dataset.id);
+    if (!room || !confirm(`${room.roomNumber}を${room.active ? '無効化' : '有効化'}しますか？`)) return;
+    const active = !room.active;
+    dataAccess.rooms.update(room.id, { active, updatedAt:new Date().toISOString() });
+    addAudit(state, { property:property.name, room:room.roomNumber }, `部屋「${room.roomNumber}」を${active ? '有効化' : '無効化'}`);
+    persist(`部屋を${active ? '有効化' : '無効化'}しました。`);
+    openPropertyDetail(property.id);
+  }));
   $('propertyDetailContent').querySelectorAll('.property-case-link').forEach(button => button.addEventListener('click', () => {
     $('propertyDetailModal').classList.add('hidden');
     closePropertyAdmin();
@@ -987,8 +1098,30 @@ async function init() {
   $('clearPropertyForm').addEventListener('click', resetPropertyForm);
   $('closePropertyDetail').addEventListener('click', closePropertyDetail);
   $('propertyDetailModal').addEventListener('click', event => { if (event.target === $('propertyDetailModal')) closePropertyDetail(); });
-  $('caseForm').elements.propertyId.addEventListener('change', () => updateCasePropertyInfo(true));
+  $('caseForm').elements.propertyId.addEventListener('change', () => { updateCasePropertyInfo(true); populateCaseRoomSelect({}); });
+  $('caseForm').elements.roomId.addEventListener('change', updateCaseRoom);
   $('newPropertyFromCase').addEventListener('click', () => { closeCaseModal(); openPropertyAdmin(); });
+  $('newRoomFromCase').addEventListener('click', () => {
+    const propertyId = $('caseForm').elements.propertyId.value;
+    const property = propertyById(propertyId);
+    if (!property || !can(sessionRole, 'manageRooms')) return notify('物件を選択してください。');
+    const entered = prompt(`${property.name}に追加する部屋番号を入力してください。`, '');
+    if (entered == null) return;
+    const roomNumber = entered.trim();
+    const normalizedRoomNumber = normalizeRoomNumber(roomNumber);
+    if (!normalizedRoomNumber) return notify('部屋番号を入力してください。');
+    const duplicate = dataAccess.rooms.getByPropertyRoom(property.id, roomNumber);
+    if (duplicate) {
+      populateCaseRoomSelect({ roomId:duplicate.id, room:duplicate.roomNumber });
+      return notify(`「${duplicate.roomNumber}」は登録済みです。`);
+    }
+    const now = new Date().toISOString();
+    const room = { ...createRoom(property.id), roomNumber, normalizedRoomNumber, propertyId:property.id, active:true, commonNote:'', createdAt:now, updatedAt:now };
+    if (!dataAccess.rooms.create(room)) return notify('部屋を追加できませんでした。');
+    addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を案件登録画面から追加`);
+    persist('部屋を追加しました。');
+    populateCaseRoomSelect({ roomId:room.id, room:room.roomNumber });
+  });
   $('duplicateCaseReview').addEventListener('click', reviewDuplicateCase);
   $('duplicateCaseProceed').addEventListener('click', () => {
     const proceed = pendingDuplicateAction?.proceed;
