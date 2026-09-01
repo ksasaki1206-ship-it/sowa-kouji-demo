@@ -2,7 +2,7 @@ const view = document.getElementById('dataSourceView');
 const title = document.getElementById('dataSourceTitle');
 const message = document.getElementById('dataSourceMessage');
 
-import('./app.js?v=20260901-22').catch(error => {
+import('./app.js?v=20260902-23').catch(error => {
   console.error('アプリを読み込めませんでした。', error);
   view.classList.remove('hidden');
   title.textContent = 'アプリを読み込めませんでした';

@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { createPostgresUserStore } from '../src/auth/postgres-user-store.js';
+import { hashPassword, verifyPassword } from '../src/auth/password-service.js';
 import { createApiService } from '../src/services/api-service.js';
 import { migrateDatabase } from '../src/db/migrate.js';
 import { STORE_CONTRACTS } from '../src/providers/contracts.js';
@@ -38,13 +40,25 @@ test('migrationは通常列・履歴table・主要indexを定義しbinary列を�
   assert.doesNotMatch(sql, /bytea|data_url|photo_binary/i);
 });
 
+test('認証user migrationは業務tableと分離しunique identifier・scrypt情報・versionを保持する', async () => {
+  const sql = await readFile(resolve(backendRoot, 'db', 'migrations', '002_auth_users.sql'), 'utf8');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS auth_users\b/);
+  for (const column of ['login_id','email','display_name','role','staff_id','active','password_hash','password_salt','password_params','password_changed_at','version']) {
+    assert.match(sql, new RegExp(`\\b${column}\\b`));
+  }
+  assert.match(sql, /UNIQUE INDEX[\s\S]+lower\(login_id\)/i);
+  assert.match(sql, /UNIQUE INDEX[\s\S]+lower\(email\)/i);
+  assert.doesNotMatch(sql, /DEFAULT\s+'password'|password\s+text/i);
+});
+
 test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integrationEnabled ? false : 'TEST_DATABASE_URLとALLOW_DATABASE_RESET=trueが必要です' }, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
   const ssl = process.env.TEST_DATABASE_SSL === 'true';
   let pool = createPostgresPool({ connectionString, ssl, max:6 });
   await migrateDatabase({ pool });
-  await pool.query('TRUNCATE photo_metadata, audit_logs, schedule_history, workflow_history, responses, cases, staff, rooms, properties RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE auth_users, photo_metadata, audit_logs, schedule_history, workflow_history, responses, cases, staff, rooms, properties RESTART IDENTITY CASCADE');
   let provider = createPostgresProvider({ pool });
+  let userStore = createPostgresUserStore({ pool });
 
   const seed = async target => {
     await target.properties.create({ id:'property-001', name:'○○マンション', address:'東京都○○区', managementCompany:'○○管理', ownerName:'', active:true, parkingInfo:'1台', version:1 });
@@ -66,6 +80,20 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     });
   };
   await seed(provider);
+
+  await t.test('認証userをscrypt credentials付きで永続化しversion競合を検出する', async () => {
+    const credentials = await hashPassword('postgres-auth-password');
+    const created = await userStore.create({
+      id:'auth-postgres-admin', loginId:'postgres-admin', email:null, displayName:'PostgreSQL管理者',
+      role:'admin', staffId:null, active:true, ...credentials, version:1
+    });
+    assert.equal(created.email, null);
+    assert.equal(await verifyPassword('postgres-auth-password', created), true);
+    const updated = await userStore.update(created.id, { displayName:'永続管理者' }, { expectedVersion:1 });
+    assert.equal(updated.version, 2);
+    await assert.rejects(() => userStore.update(created.id, { active:false }, { expectedVersion:1 }), error => error.code === 'CONFLICT');
+    await assert.rejects(() => userStore.create({ ...created, id:'auth-duplicate', passwordHash:credentials.passwordHash }), error => error.code === 'CONFLICT');
+  });
 
   await t.test('CRUDと可変field保持', async () => {
     const property = await provider.properties.get('property-001');
@@ -133,6 +161,7 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
   await provider.close();
   pool = createPostgresPool({ connectionString, ssl, max:4 });
   provider = createPostgresProvider({ pool });
+  userStore = createPostgresUserStore({ pool });
   await t.test('provider再生成後も全データが残る', async () => {
     const item = await provider.cases.get('case-001');
     assert.equal(item.workflowHistory.some(entry => entry.step === 'complete'), true);
@@ -140,6 +169,9 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     assert.equal((await provider.responses.list()).length, 1);
     assert.equal((await provider.audit.list()).some(entry => entry.detail === '入居者回答を受信'), true);
     assert.equal((await provider.photos.list()).some(photo => photo.name === 'after.jpg'), true);
+    const authUser = await userStore.findByIdentifier('postgres-admin');
+    assert.equal(authUser.displayName, '永続管理者');
+    assert.equal(authUser.version, 2);
   });
   await provider.close();
 });

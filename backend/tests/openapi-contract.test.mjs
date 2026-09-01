@@ -10,7 +10,8 @@ assert.match(source, /^openapi: 3\.1\.0$/m);
 assert.match(source, /^servers:\s*\r?\n\s+- url: https:\/\/api\.example\.invalid\/api\/v1$/m);
 
 const paths = [
-  '/health', '/cases', '/cases/{caseId}', '/properties', '/properties/{id}',
+  '/health', '/auth/login', '/auth/me', '/auth/logout', '/auth/password', '/users', '/users/{id}', '/users/{id}/password-reset',
+  '/cases', '/cases/{caseId}', '/properties', '/properties/{id}',
   '/rooms', '/rooms/{id}', '/staff', '/staff/{id}', '/responses',
   '/responses/{id}', '/audit', '/cases/{caseId}/workflow-history',
   '/cases/{caseId}/schedule-history', '/cases/{caseId}/photos',
@@ -22,6 +23,7 @@ for (const path of paths) assert.match(source, new RegExp(`^  ${path.replace(/[{
 for (const code of ['VALIDATION_ERROR','UNAUTHORIZED','FORBIDDEN','NOT_FOUND','CONFLICT','INTERNAL_ERROR']) assert.match(source, new RegExp(`\\b${code}\\b`));
 for (const scheme of ['bearerAuth','mockUser']) assert.match(source, new RegExp(`^    ${scheme}:$`, 'm'));
 assert.match(source, /additionalProperties: false[\s\S]*required: \[propertyName, roomName, accepting, closed\]/);
+for (const secretField of ['passwordHash','passwordSalt','passwordParams']) assert.doesNotMatch(source, new RegExp(`\\b${secretField}\\b`));
 assert.doesNotMatch(source, /BEGIN (RSA |EC )?PRIVATE KEY|client_secret|service_account|AIza[0-9A-Za-z_-]{20,}/i);
 
 console.log('openapi contract tests: ok');

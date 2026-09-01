@@ -176,6 +176,21 @@ BackendのStore契約を維持したまま、`DATA_PROVIDER=memory` または `D
 
 設定、schema、migration、integration test、backup方針は `backend/README.md` を参照してください。Cloud Run/Cloud SQL作成、正式認証、写真binary共有は後工程です。
 
+## 第4-B3A弾の正式認証基盤
+
+GitHub Pagesの既定local modeと従来のデモ認証を維持しつつ、HTTP modeへ正式認証の境界を追加しました。
+
+- BackendでloginIdまたはnullable email + passwordを検証
+- 認証userを案件等と分離したPostgreSQL tableへ保存
+- Node.js標準cryptoのscrypt、user別salt、timing-safe比較を使用
+- Identity Providerのcustom token発行・ID token検証を差替可能なinterfaceへ隔離
+- Bearer tokenのuidからDB userを再取得し、DB側role/staffIdで認可
+- admin向けuser追加・更新・無効化・password reset API
+- production起動時の固定admin自動生成を避けるone-time bootstrap CLI
+- development mockは維持するがproductionでは無効
+
+実Identity Platform/Firebase接続、Cloud Run deploy、GitHub Pagesのproduction Backend切替はまだ行っていません。正式HTTP modeではIdentity SDK adapterが必要で、HTTP失敗時にlocalStorageへ自動fallbackしません。詳細なAPI、環境変数、初期admin手順、Google Cloud側の残作業は `backend/README.md` と `backend/openapi.yaml` を参照してください。
+
 ## データアクセス層
 
 現在のデータフローは次のとおりです。

@@ -18,7 +18,7 @@ export class ApiError extends Error {
 }
 
 export const validationError = (message, details) => new ApiError(400, ERROR_CODES.VALIDATION_ERROR, message, details);
-export const unauthorizedError = () => new ApiError(401, ERROR_CODES.UNAUTHORIZED, '認証が必要です。');
+export const unauthorizedError = (message = '認証が必要です。') => new ApiError(401, ERROR_CODES.UNAUTHORIZED, message);
 export const forbiddenError = (message = 'この操作を行う権限がありません。') => new ApiError(403, ERROR_CODES.FORBIDDEN, message);
 export const notFoundError = (message = '対象データが見つかりません。') => new ApiError(404, ERROR_CODES.NOT_FOUND, message);
 export const conflictError = (message, details) => new ApiError(409, ERROR_CODES.CONFLICT, message, details);

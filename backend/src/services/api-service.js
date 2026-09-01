@@ -25,7 +25,7 @@ export async function isCaseAssignedToUser(provider, item, user) {
   if (!item || !user) return false;
   if (user.role !== 'worker') return true;
   const assignedIds = new Set([item.surveyStaffId, item.workStaffId].filter(Boolean));
-  return (await provider.staff.list()).some(staff => assignedIds.has(staff.id) && staff.loginUserId === user.id);
+  return Boolean(user.staffId && assignedIds.has(user.staffId));
 }
 
 async function assertCaseAccess(provider, item, user) {

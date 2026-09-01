@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Sowa Kouji API
   version: v1
-  description: memory / PostgreSQL providerで共通利用するAPI契約。正式認証と写真binary共有は後工程。
+  description: memory / PostgreSQL providerで共通利用するAPI契約。第4-B3Aでは正式認証境界を追加し、実Identity Platform接続と写真binary共有は後工程。
 servers:
   - url: https://api.example.invalid/api/v1
 security:
@@ -15,6 +15,79 @@ paths:
       summary: 稼働状態
       responses:
         '200': { $ref: '#/components/responses/Success' }
+  /auth/login:
+    post:
+      security: []
+      summary: loginIdまたはemailとpasswordを検証しIdentity Providerのcustom tokenを返す
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/me:
+    get:
+      summary: Bearer ID tokenに対応する有効user
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      summary: ログアウトをauditへ記録する。Frontendは成否にかかわらずIdentity sessionを破棄する。
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/password:
+    post:
+      summary: 自分のpassword変更
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /users:
+    get:
+      summary: 認証user一覧（adminのみ）
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: 認証user追加（adminのみ、password必須）
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        '201': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      summary: 認証user詳細（adminのみ）
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: 認証user更新・active切替（adminのみ、version必須）
+      requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /users/{id}/password-reset:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    post:
+      summary: password reset（adminのみ、versionとnewPassword必須）
+      requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Validation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /cases:
     get:
       summary: 案件一覧。workerは担当案件だけ。
@@ -228,7 +301,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: OIDC
-      description: 第4-B以降で実装する正式認証。
+      description: Identity Providerが発行したID token。BackendはuidからDB userを再取得しrole/staffIdを判定する。
     mockUser:
       type: apiKey
       in: header
@@ -267,6 +340,30 @@ components:
               version: { type: integer, minimum: 1 }
             additionalProperties: true
   schemas:
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [identifier, password]
+      properties:
+        identifier: { type: string, minLength: 1, description: loginIdまたはemail }
+        password: { type: string, minLength: 1, writeOnly: true }
+    AuthUser:
+      type: object
+      additionalProperties: false
+      required: [id, userId, loginId, displayName, role, active, version]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        loginId: { type: string }
+        email: { type: [string, 'null'], format: email }
+        displayName: { type: string }
+        role: { type: string, enum: [admin, office, worker] }
+        staffId: { type: [string, 'null'] }
+        active: { type: boolean }
+        passwordChangedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, minimum: 1 }
     Error:
       type: object
       required: [error]

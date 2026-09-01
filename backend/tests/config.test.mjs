@@ -22,3 +22,11 @@ test('PostgreSQL設定は明示URLを要求しmemory既定を維持する', () =
   assert.equal(config.databasePoolMax, 5);
   assert.equal(config.runMigrations, true);
 });
+
+test('正式認証modeはproductionでfake/memoryを拒否する', () => {
+  assert.throws(() => loadConfig({ NODE_ENV:'production', AUTH_MODE:'identity', IDENTITY_PROVIDER:'fake', DATA_PROVIDER:'postgres', DATABASE_URL:'postgresql://placeholder.invalid/test' }), /fake IdentityProvider/);
+  assert.throws(() => loadConfig({ NODE_ENV:'production', AUTH_MODE:'identity', IDENTITY_PROVIDER:'google', DATA_PROVIDER:'memory' }), /PostgreSQL/);
+  const development = loadConfig({ AUTH_MODE:'identity', IDENTITY_PROVIDER:'fake', DATA_PROVIDER:'memory' });
+  assert.equal(development.authMode, 'identity');
+  assert.equal(development.identityProvider, 'fake');
+});

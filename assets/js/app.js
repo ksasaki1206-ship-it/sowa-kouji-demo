@@ -1,5 +1,5 @@
 import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-22';
-import { dataAccess as dataProvider } from './data-access.js?v=20260901-22';
+import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } from './data-access.js?v=20260902-23';
 import { createApplicationStore } from './application-store.js?v=20260901-22';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
@@ -11,6 +11,7 @@ import { generateResidentAccessToken, residentAccessStatus } from './resident-ac
 import { createQrSvg } from './qr.js?v=20260901-22';
 
 const dataAccess = createApplicationStore(dataProvider);
+const formalAuthMode = dataAccess.isRemote && dataSourceConfig.apiAuthMode === 'identity';
 const addAudit = (...args) => dataAccess.isRemote ? null : appendLocalAudit(...args);
 const auditChanges = (...args) => dataAccess.isRemote ? null : appendLocalAuditChanges(...args);
 const loadGate = createRequestGate();
@@ -21,6 +22,7 @@ let noticeTimer = 0;
 let sessionUser = '';
 let sessionUserId = '';
 let sessionRole = '';
+let sessionStaffId = '';
 let scheduleMode = 'property';
 let pendingPhotoAction = null;
 let pendingConflictAction = null;
@@ -45,7 +47,10 @@ const caseById = id => dataAccess.cases.get(id);
 const responseForCase = c => workflowResponseForCase(state, c);
 const staffList = () => dataAccess.staff.list();
 const staffById = id => id ? dataAccess.staff.get(id) : null;
-const ownsCase = c => workerOwnsCase(c, sessionUser, sessionUserId, staffList());
+const currentSessionStaff = () => sessionStaffId ? staffById(sessionStaffId) : staffList().find(person => person.loginUserId === sessionUserId);
+const ownsCase = c => sessionRole !== 'worker' || (sessionStaffId
+  ? [c.surveyStaffId, c.workStaffId].includes(sessionStaffId)
+  : workerOwnsCase(c, sessionUser, sessionUserId, staffList()));
 const scheduleReasonLabel = value => SCHEDULE_REASON_CATEGORIES.find(([key]) => key === value)?.[1] || value || '理由未登録';
 const cancelReasonLabel = value => CANCEL_REASON_CATEGORIES.find(([key]) => key === value)?.[1] || value || '理由未登録';
 
@@ -297,8 +302,8 @@ function workerEventHtml(event) {
 }
 
 function renderWorkerHome() {
-  const linkedStaff = staffList().find(person => person.loginUserId === sessionUserId);
-  const events = getStaffEvents(state, 'week').filter(event => linkedStaff ? event.staffId === linkedStaff.id || event.staff === sessionUser : event.staff === sessionUser);
+  const linkedStaff = currentSessionStaff();
+  const events = getStaffEvents(state, 'week').filter(event => linkedStaff ? event.staffId === linkedStaff.id || (!sessionStaffId && event.staff === sessionUser) : event.staff === sessionUser);
   const today = todayKey();
   const todayEvents = events.filter(event => datePart(event.at) === today);
   $('workerTodayCount').textContent = `${todayEvents.length}件`;
@@ -358,8 +363,8 @@ function workflowTimelineHtml(c) {
 
 function openWorkerDetail(c) {
   currentCaseId = c.id;
-  const linkedStaff = staffList().find(person => person.loginUserId === sessionUserId);
-  const workAssigned = linkedStaff ? c.workStaffId === linkedStaff.id || c.workStaff === sessionUser : c.workStaff === sessionUser;
+  const linkedStaff = currentSessionStaff();
+  const workAssigned = linkedStaff ? c.workStaffId === linkedStaff.id || (!sessionStaffId && c.workStaff === sessionUser) : c.workStaff === sessionUser;
   $('detailCard').innerHTML = `
     <section class="card worker-detail-head"><span class="event-kind ${workAssigned ? 'work' : 'survey'}">${workAssigned ? '工事' : '現調'}</span><h1>${esc(c.property)} ${esc(c.room)}</h1><span class="badge">${esc(c.status)}</span></section>
     <section class="card worker-info"><div><span class="lab">住所</span><b>${esc(c.address || '住所未登録')}</b></div><div><span class="lab">日時</span><b>${esc(formatPlan(workAssigned ? c.workAt : c.surveyAt, workAssigned ? c.workDurationMinutes : c.surveyDurationMinutes))}</b></div><div><span class="lab">現場備考</span><b>${esc(c.note || 'なし')}</b></div></section>
@@ -732,8 +737,8 @@ function reviewConflictSchedule() {
 }
 
 function openWorkerCompletion(c) {
-  const linkedStaff = staffList().find(person => person.loginUserId === sessionUserId);
-  const assigned = linkedStaff ? c.workStaffId === linkedStaff.id || c.workStaff === sessionUser : c.workStaff === sessionUser;
+  const linkedStaff = currentSessionStaff();
+  const assigned = linkedStaff ? c.workStaffId === linkedStaff.id || (!sessionStaffId && c.workStaff === sessionUser) : c.workStaff === sessionUser;
   if (!can(sessionRole, 'completeOwn') || !assigned) return notify('完了報告できるのは施工担当案件のみです。');
   const form = $('workerCompleteForm');
   form.reset();
@@ -935,13 +940,19 @@ function showLogin() {
   sessionUser = '';
   sessionUserId = '';
   sessionRole = '';
+  sessionStaffId = '';
   $('appRoot').classList.add('hidden');
   $('residentPublicView').classList.add('hidden');
   hideDataSourceStatus();
   $('loginView').classList.remove('hidden');
   $('loginPassword').value = '';
+  $('loginUserLabel').classList.toggle('hidden', formalAuthMode);
+  $('loginIdentifierLabel').classList.toggle('hidden', !formalAuthMode);
+  $('loginIdentifier').required = formalAuthMode;
+  $('loginLead').textContent = formalAuthMode ? 'メールアドレスまたはログインIDでログインしてください。' : 'デモを操作するユーザーを選択してください。';
+  $('loginNote').textContent = formalAuthMode ? '認証情報はBackendで業務データと分離して管理します。正式運用ではHTTPS接続が必須です。' : 'GitHub Pages上のデモ用認証です。本番用のセキュリティではありません。';
   setFormError('loginError', '');
-  $('loginUser').focus();
+  (formalAuthMode ? $('loginIdentifier') : $('loginUser')).focus();
 }
 
 async function copyText(text, successMessage) {
@@ -1145,10 +1156,11 @@ function updateRoleUi(role) {
 }
 
 async function activateSession(session) {
-  if (!session || !USERS.includes(session.user)) return showLogin();
+  if (!session || !['admin','office','worker'].includes(session.role) || (!formalAuthMode && !USERS.includes(session.user))) return showLogin();
   sessionUser = session.user;
   sessionUserId = session.userId;
   sessionRole = session.role;
+  sessionStaffId = session.staffId || '';
   showDataSourceStatus('データを読み込んでいます', dataAccess.isRemote ? '共有APIから最新情報を取得しています。' : '端末内のデモデータを準備しています。');
   const token = loadGate.begin();
   try {
@@ -1163,7 +1175,7 @@ async function activateSession(session) {
   state.currentUser = session.user;
   await dataAccess.snapshot.save();
   $('loggedInUser').textContent = session.user;
-  $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
+  $('userAdminButton').classList.toggle('hidden', formalAuthMode || !can(session.role, 'manageUsers'));
   $('staffAdminButton').classList.toggle('hidden', !can(session.role, 'manageStaff'));
   $('propertyButton').classList.toggle('hidden', session.role === 'worker');
   $('propertyButton').textContent = can(session.role, 'manageProperties') ? '物件管理' : '物件情報';
@@ -1179,14 +1191,21 @@ async function activateSession(session) {
 async function handleLogin(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  await runWithPending(form.querySelector('[type="submit"]'), async () => {
-    const session = await authenticate($('loginUser').value, $('loginPassword').value);
-    if (!session) return setFormError('loginError', 'ユーザーまたはパスワードが正しくありません');
-    setFormError('loginError', '');
-    if (!await activateSession(session)) return;
-    addAudit(state, {}, 'ログイン', session.user);
-    await persist();
-  }, 'ログイン中…');
+  try {
+    await runWithPending(form.querySelector('[type="submit"]'), async () => {
+      const session = formalAuthMode
+        ? await remoteAuthController.login($('loginIdentifier').value, $('loginPassword').value)
+        : await authenticate($('loginUser').value, $('loginPassword').value);
+      if (!session) return setFormError('loginError', formalAuthMode ? 'ユーザーIDまたはパスワードが正しくありません' : 'ユーザーまたはパスワードが正しくありません');
+      setFormError('loginError', '');
+      if (!await activateSession(session)) return;
+      addAudit(state, {}, 'ログイン', session.user);
+      await persist();
+    }, 'ログイン中…');
+  } catch (error) {
+    const message = error?.status === 401 ? 'ユーザーIDまたはパスワードが正しくありません' : error?.message || 'ログインできませんでした。';
+    setFormError('loginError', message);
+  }
 }
 
 function openPasswordModal() {
@@ -1205,8 +1224,13 @@ async function saveOwnPassword(event) {
     const currentPassword = form.elements.currentPassword.value;
     const newPassword = form.elements.newPassword.value;
     if (newPassword !== form.elements.confirmPassword.value) return setFormError('passwordError', '新しいパスワードが一致しません。');
-    const result = await changeOwnPassword(sessionUser, currentPassword, newPassword);
-    if (!result.ok) return setFormError('passwordError', result.error);
+    if (formalAuthMode) {
+      try { await remoteAuthController.changePassword(currentPassword, newPassword); }
+      catch (error) { return setFormError('passwordError', error?.message || 'パスワードを変更できませんでした。'); }
+    } else {
+      const result = await changeOwnPassword(sessionUser, currentPassword, newPassword);
+      if (!result.ok) return setFormError('passwordError', result.error);
+    }
     addAudit(state, {}, '自分のパスワードを変更');
     await persist('パスワードを変更しました。');
     closePasswordModal();
@@ -1505,14 +1529,18 @@ function openPropertyDetail(id) {
 function closePropertyDetail() { $('propertyDetailModal').classList.add('hidden'); }
 
 async function init() {
-  await ensureCredentials();
+  if (!formalAuthMode) await ensureCredentials();
   ensurePhase2Ui();
-  if (dataAccess.isRemote) document.querySelector('.foot').textContent = '※開発用HTTPモードです。写真はメタデータのみ扱い、Backend再起動でデータは消去されます。';
-  populateSelect($('loginUser'), USERS);
+  if (dataAccess.isRemote) document.querySelector('.foot').textContent = '※共有APIモードです。写真はメタデータのみ扱います。';
+  if (!formalAuthMode) populateSelect($('loginUser'), USERS);
+  if (formalAuthMode) {
+    $('passwordForm').elements.newPassword.minLength = 10;
+    $('passwordForm').elements.confirmPassword.minLength = 10;
+  }
   populateSelect($('statusSelect'), STATUSES);
   setDefaultResponseDates();
   $('loginForm').addEventListener('submit', handleLogin);
-  $('logoutButton').addEventListener('click', () => runUiAction(async () => { addAudit(state, {}, 'ログアウト'); await persist(); loadGate.invalidate(); clearSession(); showLogin(); }));
+  $('logoutButton').addEventListener('click', () => runUiAction(async () => { addAudit(state, {}, 'ログアウト'); await persist(); loadGate.invalidate(); if (formalAuthMode) await remoteAuthController.logout(); else clearSession(); showLogin(); }));
   $('passwordButton').addEventListener('click', openPasswordModal);
   $('closePasswordModal').addEventListener('click', closePasswordModal);
   $('passwordModal').addEventListener('click', event => { if (event.target === $('passwordModal')) closePasswordModal(); });
@@ -1647,8 +1675,8 @@ async function init() {
     notify('初期状態に戻しました。');
   });
   if (pendingRoute.type === ROUTE_TYPES.resident) return await showResidentRoute(pendingRoute.residentToken);
-  const session = getSession();
-  session && USERS.includes(session.user) ? await activateSession(session) : showLogin();
+  const session = formalAuthMode ? await remoteAuthController.restoreSession() : getSession();
+  session && (formalAuthMode || USERS.includes(session.user)) ? await activateSession(session) : showLogin();
 }
 
 init().catch(error => { console.error('アプリの初期化に失敗しました。', error); showLogin(); });

@@ -37,9 +37,22 @@ function applyCors(request, response, allowedOrigins) {
 
 const route = (method, pattern, action, options = {}) => ({ method, pattern, action, ...options });
 
-export function createApp({ service, authProvider, allowedOrigins = [] }) {
+export function createApp({ service, authProvider, authService = null, allowedOrigins = [] }) {
+  const formalAuth = () => {
+    if (!authService) throw notFoundError('正式認証endpointは現在のmodeでは利用できません。');
+    return authService;
+  };
   const routes = [
     route('GET', /^\/api\/v1\/health$/, ({ service }) => service.health(), { public:true }),
+    route('POST', /^\/api\/v1\/auth\/login$/, ({ body }) => formalAuth().login(body), { public:true, body:true }),
+    route('GET', /^\/api\/v1\/auth\/me$/, ({ user }) => formalAuth().me(user)),
+    route('POST', /^\/api\/v1\/auth\/logout$/, ({ user }) => formalAuth().logout(user)),
+    route('POST', /^\/api\/v1\/auth\/password$/, ({ user, body }) => formalAuth().changeOwnPassword(user, body), { body:true }),
+    route('GET', /^\/api\/v1\/users$/, ({ user }) => formalAuth().listUsers(user)),
+    route('POST', /^\/api\/v1\/users$/, ({ user, body }) => formalAuth().createUser(body, user), { created:true, body:true }),
+    route('POST', /^\/api\/v1\/users\/([^/]+)\/password-reset$/, ({ user, params, body }) => formalAuth().resetPassword(params[0], body, user), { body:true }),
+    route('GET', /^\/api\/v1\/users\/([^/]+)$/, ({ user, params }) => formalAuth().getUser(params[0], user)),
+    route('PATCH', /^\/api\/v1\/users\/([^/]+)$/, ({ user, params, body }) => formalAuth().updateUser(params[0], body, user), { body:true }),
     route('GET', /^\/api\/v1\/cases$/, ({ service, user }) => service.listCases(user)),
     route('POST', /^\/api\/v1\/cases$/, ({ service, user, body }) => service.createCase(body, user), { created:true, body:true }),
     route('GET', /^\/api\/v1\/cases\/([^/]+)$/, ({ service, user, params }) => service.getCase(params[0], user)),
