@@ -1,6 +1,6 @@
-import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-19';
-import { USER_DEFINITIONS } from './auth.js?v=20260901-19';
-import { changeSchedule, postponeSchedule, cancelCase, restoreCancelledCase, archiveCase, unarchiveCase } from './lifecycle.js?v=20260901-19';
+import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-20';
+import { USER_DEFINITIONS } from './auth.js?v=20260901-20';
+import { changeSchedule, postponeSchedule, cancelCase, restoreCancelledCase, archiveCase, unarchiveCase } from './lifecycle.js?v=20260901-20';
 
 const array = (state, key) => Array.isArray(state?.[key]) ? state[key] : [];
 const matchId = (item, id) => item?.id === id;
@@ -55,6 +55,24 @@ export const lifecycleRepository = Object.freeze({
   },
   unarchive(state, caseId) {
     return unarchiveCase(caseRepository.get(state, caseId));
+  }
+});
+
+export const residentAccessRepository = Object.freeze({
+  getByToken(state, token) {
+    return caseRepository.list(state).find(item => item.residentAccessToken === token) || null;
+  },
+  setEnabled(state, caseId, enabled, updatedAt = new Date().toISOString()) {
+    return caseRepository.update(state, caseId, { residentAccessEnabled:Boolean(enabled), residentAccessUpdatedAt:updatedAt });
+  },
+  regenerate(state, caseId, token, updatedAt = new Date().toISOString()) {
+    if (!token || this.getByToken(state, token)) return null;
+    const item = caseRepository.get(state, caseId);
+    if (!item) return null;
+    item.residentAccessToken = token;
+    item.residentAccessEnabled = true;
+    item.residentAccessUpdatedAt = updatedAt;
+    return item;
   }
 });
 
@@ -293,6 +311,7 @@ export const photoRepository = Object.freeze({
 export const repositories = Object.freeze({
   cases:caseRepository,
   lifecycle:lifecycleRepository,
+  residentAccess:residentAccessRepository,
   responses:responseRepository,
   auditLogs:auditRepository,
   workflows:workflowRepository,

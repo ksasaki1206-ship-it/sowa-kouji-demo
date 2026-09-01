@@ -14,6 +14,9 @@
 - `assets/js/audit.js`: 操作履歴と案件編集時の差分記録
 - `assets/js/auth.js`: ロール付きユーザー定義、権限定義、ログイン状態、パスワードのハッシュ化・変更・リセット
 - `assets/js/workflow.js`: 次アクション、要対応判定、管理指標、担当者別予定の業務ルール
+- `assets/js/routing.js`: 案件リンク・入居者回答リンクの解析、URL生成、直接遷移の権限判定
+- `assets/js/resident-access.js`: 入居者回答トークンの生成と公開可否判定
+- `assets/js/qr.js`: リポジトリ内のライブラリを使ったQRコード生成
 - `assets/js/app.js`: 画面描画、スケジュール、案件・写真・入居者回答の操作
 
 保存キー `sowa-demo-photo-v1` と既存フィールドは従来版と互換です。
@@ -96,6 +99,22 @@
 - 権限：admin / officeは取消・アーカイブが可能。取消・アーカイブの解除はadminだけに限定
 
 完了・取消・アーカイブ案件は、今日の予定、物件／担当者スケジュール、要対応、予定重複、worker画面の対象外です。既存案件には読み込み時に `lifecycleStatus: active`、空の `scheduleHistory`、未アーカイブ状態を非破壊で補完します。物理削除は行いません。
+
+## 第3-D1弾の共有リンク・入居者用QR
+
+- 案件直接リンク：`?case=CASE_ID` で案件詳細を開き、未ログイン時はログイン後に自動遷移
+- 権限制御：admin / officeは進行中・完了・取消・アーカイブを直接表示でき、workerは自分の担当案件だけを表示
+- 案件リンク操作：admin / officeの案件詳細からURLをコピー
+- 入居者回答リンク：`?resident=TOKEN` でログイン画面を通らず、紐づく物件・部屋を固定表示した希望日時フォームを開く
+- 公開状態管理：admin / officeは回答受付の停止・再開、adminは確認後のQR再発行が可能
+- 回答紐付け：新しい回答には `caseId`、`propertyId`、`roomId` を保存し、旧回答にも判定可能な範囲で非破壊補完
+- 操作履歴：受付停止・再開・QR再発行は記録するが、公開トークンの値は履歴へ保存しない
+
+公開トークンは24バイトの乱数から生成する推測困難な識別子ですが、GitHub PagesとlocalStorageだけで動くデモ用の仕組みであり、本番の認証・認可を代替しません。実行時にQR生成の外部APIやCDNへ接続せず、QRコードはブラウザ内で生成します。
+
+この静的デモの保存先はブラウザごとのlocalStorageです。同じ端末・ブラウザでは案件URL、回答、履歴を確認できますが、別端末で送信した回答が管理側端末へ同期されることはありません。初期デモ案件の公開トークンは端末間で同じデモ値を使い、追加案件や再発行後のトークンとデータはその端末内だけで有効です。複数端末での正式運用には、認証・権限検証を行うバックエンドと共有データストアが必要です。
+
+QR生成には [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) を使用し、`assets/vendor/qrcode-generator/qrcode.mjs` とMITライセンス原文 `assets/vendor/qrcode-generator/LICENSE` を同梱しています。
 
 ## データアクセス層
 

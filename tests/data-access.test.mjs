@@ -9,7 +9,7 @@ globalThis.localStorage = {
 
 const { STORAGE_KEY, migrateState } = await import('../assets/js/data.js');
 const { createLocalDataAccess } = await import('../assets/js/data-access.js');
-const { AUTH_KEY, CREDENTIALS_KEY, authenticate, changeOwnPassword, ensureCredentials, getSession, logout, resetAllPasswords, resetUserPassword } = await import('../assets/js/auth.js');
+const { AUTH_KEY, CREDENTIALS_KEY, authenticate, can, changeOwnPassword, ensureCredentials, getSession, logout, resetAllPasswords, resetUserPassword } = await import('../assets/js/auth.js');
 
 assert.equal(STORAGE_KEY, 'sowa-demo-photo-v1');
 assert.equal(AUTH_KEY, 'sowa-demo-auth-v1');
@@ -46,6 +46,12 @@ assert.deepEqual(legacyCase.scheduleHistory, []);
 assert.equal(legacyCase.isArchived, false);
 assert.equal(legacy.auditLogs[0].detail, '既存履歴');
 assert.equal(legacy.responses[0].name, '既存入居者');
+assert.equal(legacy.responses[0].caseId, legacyCase.id);
+assert.equal(legacy.responses[0].propertyId, legacyCase.propertyId);
+assert.equal(legacy.responses[0].roomId, legacyCase.roomId);
+assert.match(legacyCase.residentAccessToken, /^[0-9A-Za-z_-]{32,}$/);
+assert.equal(legacyCase.residentAccessEnabled, true);
+assert.equal(Boolean(legacyCase.residentAccessCreatedAt), true);
 assert.equal(legacyCase.surveyDurationMinutes, 60);
 assert.equal(legacyCase.workDurationMinutes, 180);
 assert.equal(Boolean(legacyCase.surveyStaffId), true);
@@ -73,6 +79,13 @@ const access = createLocalDataAccess();
 const state = access.snapshot.load();
 assert.equal(access.adapter, 'localStorage');
 assert.equal(access.cases.get('legacy-1').property, '既存物件');
+const originalResidentToken = access.cases.get('legacy-1').residentAccessToken;
+assert.equal(access.residentAccess.getByToken(originalResidentToken).id, 'legacy-1');
+access.residentAccess.setEnabled('legacy-1', false, '2026-09-01T09:00:00.000Z');
+assert.equal(access.cases.get('legacy-1').residentAccessEnabled, false);
+assert.equal(access.residentAccess.regenerate('legacy-1', 'replacement_resident_access_token_123456', '2026-09-01T09:05:00.000Z').residentAccessEnabled, true);
+assert.equal(access.residentAccess.getByToken(originalResidentToken), null);
+assert.equal(access.residentAccess.getByToken('replacement_resident_access_token_123456').id, 'legacy-1');
 let lifecycleResult = access.lifecycle.changeSchedule('legacy-1', 'survey', { at:'2026-09-04T11:00', durationMinutes:60, reasonCategory:'resident', reason:'入居者都合', changedBy:'西山さん' });
 assert.equal(lifecycleResult.ok, true);
 assert.equal(access.lifecycle.listSchedule('legacy-1', 'survey').at(-1).oldAt, '2026-09-02T10:00');
@@ -114,6 +127,11 @@ assert.equal(access.photos.remove('test-case', 'after', 0).id, photo.id);
 
 assert.equal(access.users.get('西山さん').role, 'admin');
 assert.equal(access.users.list().length, 5);
+assert.equal(can('admin', 'manageResidentAccess'), true);
+assert.equal(can('admin', 'regenerateResidentAccess'), true);
+assert.equal(can('office', 'manageResidentAccess'), true);
+assert.equal(can('office', 'regenerateResidentAccess'), false);
+assert.equal(can('worker', 'manageResidentAccess'), false);
 const addedStaff = { id:'staff-test', name:'テスト班', type:'team', canSurvey:false, canWork:true, loginUserId:'', active:true };
 assert.equal(access.staff.create(addedStaff).name, 'テスト班');
 access.staff.update('staff-test', { active:false });
@@ -168,6 +186,8 @@ assert.equal(reset.cases.find(item => item.id === 'c1').roomId, 'room-001');
 assert.equal(reset.cases.find(item => item.id === 'c1').lifecycleStatus, 'active');
 assert.deepEqual(reset.cases.find(item => item.id === 'c1').scheduleHistory, []);
 assert.equal(reset.cases.find(item => item.id === 'c1').isArchived, false);
+assert.equal(reset.cases.every(item => item.residentAccessEnabled === true), true);
+assert.equal(new Set(reset.cases.map(item => item.residentAccessToken)).size, reset.cases.length);
 assert.equal(access.snapshot.current(), reset);
 
 console.log('data-access tests: ok');

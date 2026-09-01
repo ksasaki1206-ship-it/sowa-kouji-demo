@@ -1,9 +1,12 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-19';
-import { dataAccess } from './data-access.js?v=20260901-19';
-import { addAudit, auditChanges } from './audit.js?v=20260901-19';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-19';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-19';
-import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-19';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-20';
+import { dataAccess } from './data-access.js?v=20260901-20';
+import { addAudit, auditChanges } from './audit.js?v=20260901-20';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-20';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-20';
+import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-20';
+import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-20';
+import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-20';
+import { createQrSvg } from './qr.js?v=20260901-20';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;
@@ -18,6 +21,8 @@ let pendingDuplicateAction = null;
 let lifecycleActionContext = null;
 let editingCaseSnapshot = null;
 let caseListMode = 'active';
+let pendingRoute = parseAppRoute(location.href);
+let residentRouteCase = null;
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -172,6 +177,8 @@ function nextAction(c) {
 
 function ensurePhase2Ui() {
   $('view-home').insertAdjacentHTML('afterend', '<section id="view-worker" class="view hidden"><div class="worker-hero"><div><span class="worker-kicker">職人用</span><h1>今日の現場</h1><p class="muted">担当している現場だけを表示します。</p></div><div id="workerTodayCount" class="worker-count">0件</div></div><div id="workerToday"></div><section class="home-section"><div class="section-head"><div><h2>今後7日間の担当予定</h2><p class="muted">現調と工事を時間順に表示します。</p></div></div><div id="workerUpcoming"></div></section></section>');
+  $('view-worker').insertAdjacentHTML('afterend', '<section id="view-route-error" class="view hidden"><div class="card route-error-card"><h1>案件リンク</h1><p id="routeErrorMessage"></p><button id="routeErrorHome" class="btn primary" type="button">ホームへ戻る</button></div></section>');
+  document.body.insertAdjacentHTML('beforeend', '<div id="residentQrModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="residentQrTitle"><div class="modalbox resident-qr-modal"><div class="modalhead"><div id="residentQrTitle" class="big">入居者用QR</div><button id="closeResidentQr" class="btn" type="button">閉じる</button></div><div id="residentQrCase" class="resident-qr-case"></div><div id="residentQrStatus" class="resident-access-status"></div><div id="residentQrCode" class="resident-qr-code"></div><label><span class="field-label">入居者回答URL</span><input id="residentQrUrl" class="input" type="text" readonly></label><div class="actions"><button id="copyResidentUrl" class="btn primary" type="button">URLをコピー</button><button id="copyResidentGuide" class="btn" type="button">案内文をコピー</button></div><div class="resident-access-actions"><button id="toggleResidentAccess" class="btn" type="button"></button><button id="regenerateResidentAccess" class="btn danger hidden" type="button">QRを再発行</button></div><p class="muted resident-qr-note">入居者はログイン不要です。希望日時は確定日時とは別に案件へ保存されます。</p></div></div>');
   $('view-cases').querySelector('.search').insertAdjacentHTML('beforebegin', '<div id="caseModeTabs" class="subtabs case-mode-tabs"><button class="btn primary" type="button" data-case-mode="active">進行中</button><button class="btn" type="button" data-case-mode="past">過去案件</button></div><label id="pastCaseFilterLabel" class="past-case-filter hidden"><span class="field-label">過去案件の種別</span><select id="pastCaseFilter" class="select"><option value="all">完了・取消・アーカイブすべて</option><option value="complete">完了</option><option value="cancelled">取消</option><option value="archived">アーカイブ済</option></select></label>');
   const nextActionLabel = $('caseForm').elements.nextActionOverride.closest('label');
   const oldDelivery = $('caseForm').querySelector('input[name="materialDeliveryAt"]');
@@ -196,9 +203,9 @@ function ensurePhase2Ui() {
 }
 
 function show(view) {
-  if (sessionRole === 'worker' && !['home','detail'].includes(view)) view = 'home';
+  if (sessionRole === 'worker' && !['home','detail','route-error'].includes(view)) view = 'home';
   const effectiveView = view === 'home' && sessionRole === 'worker' ? 'worker' : view;
-  ['home','worker','cases','detail','schedule','responses','history'].forEach(name => $(`view-${name}`).classList.toggle('hidden', name !== effectiveView));
+  ['home','worker','cases','detail','schedule','responses','history','route-error'].forEach(name => $(`view-${name}`).classList.toggle('hidden', name !== effectiveView));
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.view === view || (view === 'detail' && button.dataset.view === (sessionRole === 'worker' ? 'home' : 'cases'))));
   if (effectiveView === 'home') renderHome();
   if (effectiveView === 'worker') renderWorkerHome();
@@ -347,7 +354,7 @@ function openDetail(id) {
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
     <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
     <section class="card detail-card"><div class="section-head"><h2 class="section-title">工事</h2>${active && can(sessionRole, 'manageLifecycle') && c.workAt ? '<button class="btn postpone-schedule" data-type="work" type="button">工事を延期</button>' : ''}</div><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定時間</div><div class="val">${esc(formatPlan(c.workAt, c.workDurationMinutes))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
-    <div class="actions">${active ? '<button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button>' : ''}${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}${lifecycleActionsHtml(c)}</div>
+    <div class="actions">${active ? '<button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button>' : ''}${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}<button id="copyCaseLink" class="btn" type="button">案件リンクをコピー</button><button id="showResidentQr" class="btn" type="button">入居者用QR</button>${lifecycleActionsHtml(c)}</div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
     <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">予定変更・案件履歴</h2>${scheduleHistoryHtml(c)}</section>
@@ -456,6 +463,8 @@ function wireDetail(c) {
   });
   $('editCase')?.addEventListener('click', () => openCaseModal(c));
   $('viewCaseProperty')?.addEventListener('click', () => openPropertyDetail(c.propertyId));
+  $('copyCaseLink')?.addEventListener('click', () => copyText(buildCaseUrl(location.href, c.id), '案件リンクをコピーしました。'));
+  $('showResidentQr')?.addEventListener('click', () => openResidentQr(c.id));
   document.querySelectorAll('.postpone-schedule').forEach(button => button.addEventListener('click', () => openLifecycleAction(c, 'postpone', button.dataset.type)));
   $('cancelCase')?.addEventListener('click', () => openLifecycleAction(c, 'cancel'));
   $('restoreCancelledCase')?.addEventListener('click', () => restoreCancelled(c));
@@ -796,29 +805,44 @@ function renderResponses() {
   wireCaseLinks($('responseList'));
 }
 
-function saveResidentResponse(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
+function createResidentResponse(form, fixedCase = null) {
   const data = new FormData(form);
-  const response = { id:`r${Date.now()}`, property:data.get('property'), room:data.get('room'), name:data.get('name'), phone:data.get('phone'), d1:data.get('d1'), t1:data.get('t1'), d2:data.get('d2'), t2:data.get('t2'), note:data.get('note'), receivedAt:new Date().toISOString(), applied:false, caseId:'' };
-  const c = dataAccess.cases.getByPropertyRoom(response.property, response.room);
+  const property = fixedCase?.property || data.get('property');
+  const room = fixedCase?.room || data.get('room');
+  const response = { id:`r${Date.now()}`, property, room, propertyId:fixedCase?.propertyId || '', roomId:fixedCase?.roomId || '', name:data.get('name'), phone:data.get('phone'), d1:data.get('d1'), t1:data.get('t1'), d2:data.get('d2'), t2:data.get('t2'), note:data.get('note'), receivedAt:new Date().toISOString(), applied:false, caseId:'' };
+  const c = fixedCase || dataAccess.cases.getByPropertyRoom(response.property, response.room);
   if (c) {
     response.applied = true;
     response.caseId = c.id;
-    c.residentResponseId = response.id;
-    c.residentName = response.name || c.residentName;
-    c.note = c.note.replace('／入居者回答待ち','').replace('入居者回答待ち','').trim();
+    response.propertyId = c.propertyId || response.propertyId;
+    response.roomId = c.roomId || response.roomId;
+    dataAccess.cases.update(c.id, { residentResponseId:response.id, residentName:response.name || c.residentName, note:c.note.replace('／入居者回答待ち','').replace('入居者回答待ち','').trim() });
     addAudit(state, c, '入居者回答を受信し、希望日時を案件へ反映', '入居者');
   } else {
     addAudit(state, { property:response.property, room:response.room }, '入居者回答を受信（対象案件なし）', '入居者');
   }
   dataAccess.responses.create(response);
   persist(c ? '回答を受け付け、案件へ反映しました。' : '回答を受け付けました。対象案件は未登録です。');
+  return { response, caseItem:c };
+}
+
+function saveResidentResponse(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  createResidentResponse(form);
   form.reset();
   form.elements.property.value = '○○マンション';
   form.elements.room.value = '102号室';
   setDefaultResponseDates();
   setResponseMode('list');
+}
+
+function savePublicResidentResponse(event) {
+  event.preventDefault();
+  if (!residentRouteCase || residentAccessStatus(residentRouteCase).status !== 'open') return showResidentRoute(pendingRoute.residentToken);
+  createResidentResponse(event.currentTarget, residentRouteCase);
+  $('residentPublicFormPanel').classList.add('hidden');
+  $('residentPublicComplete').classList.remove('hidden');
 }
 
 function renderHistory() {
@@ -843,10 +867,131 @@ function showLogin() {
   sessionUserId = '';
   sessionRole = '';
   $('appRoot').classList.add('hidden');
+  $('residentPublicView').classList.add('hidden');
   $('loginView').classList.remove('hidden');
   $('loginPassword').value = '';
   setFormError('loginError', '');
   $('loginUser').focus();
+}
+
+async function copyText(text, successMessage) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    if (!copied) return notify('コピーできませんでした。URLを選択してコピーしてください。');
+  }
+  notify(successMessage);
+}
+
+function residentGuide(item, url) {
+  return `${item.property} ${item.room} 入居者様\n現地調査の希望日時を、次のURLまたはQRコードからご回答ください。\n${url}\n※希望日時は確定日時ではありません。担当者からのご連絡をお待ちください。`;
+}
+
+function closeResidentQr() {
+  $('residentQrModal').classList.add('hidden');
+  $('residentQrModal').dataset.caseId = '';
+}
+
+function openResidentQr(caseId) {
+  if (!can(sessionRole, 'manageResidentAccess')) return notify('この操作を行う権限がありません。');
+  const item = dataAccess.cases.get(caseId);
+  if (!item) return notify('案件が見つかりません。');
+  const url = buildResidentUrl(location.href, item.residentAccessToken);
+  const access = residentAccessStatus(item);
+  const statusLabels = { open:'受付中', disabled:'停止中', closed:'受付終了', unavailable:'利用不可' };
+  $('residentQrModal').dataset.caseId = item.id;
+  $('residentQrCase').innerHTML = `<b>${esc(item.property)}</b><strong>${esc(item.room)}</strong>`;
+  $('residentQrStatus').className = `resident-access-status ${access.status}`;
+  $('residentQrStatus').textContent = statusLabels[access.status] || '利用不可';
+  $('residentQrCode').innerHTML = createQrSvg(url);
+  $('residentQrUrl').value = url;
+  $('toggleResidentAccess').textContent = item.residentAccessEnabled === false ? '回答受付を再開' : '回答受付を停止';
+  $('toggleResidentAccess').classList.toggle('danger', item.residentAccessEnabled !== false);
+  $('regenerateResidentAccess').classList.toggle('hidden', !can(sessionRole, 'regenerateResidentAccess'));
+  $('residentQrModal').classList.remove('hidden');
+}
+
+function currentResidentQrCase() {
+  return dataAccess.cases.get($('residentQrModal').dataset.caseId);
+}
+
+function toggleResidentAccess() {
+  if (!can(sessionRole, 'manageResidentAccess')) return notify('この操作を行う権限がありません。');
+  const item = currentResidentQrCase();
+  if (!item) return closeResidentQr();
+  const enabled = item.residentAccessEnabled === false;
+  dataAccess.residentAccess.setEnabled(item.id, enabled);
+  addAudit(state, item, enabled ? '入居者回答ページの受付を再開' : '入居者回答ページの受付を停止');
+  persist(enabled ? '入居者回答の受付を再開しました。' : '入居者回答の受付を停止しました。');
+  openResidentQr(item.id);
+}
+
+function regenerateResidentAccess() {
+  if (!can(sessionRole, 'regenerateResidentAccess')) return notify('この操作を行う権限がありません。');
+  const item = currentResidentQrCase();
+  if (!item) return closeResidentQr();
+  if (!confirm('QRを再発行すると、これまでの入居者回答URLは利用できなくなります。再発行しますか？')) return;
+  let updated = null;
+  for (let attempt = 0; attempt < 5 && !updated; attempt += 1) {
+    updated = dataAccess.residentAccess.regenerate(item.id, generateResidentAccessToken());
+  }
+  if (!updated) return notify('QRを再発行できませんでした。もう一度お試しください。');
+  addAudit(state, updated, '入居者回答ページのQRを再発行');
+  persist('入居者用QRを再発行しました。');
+  openResidentQr(updated.id);
+}
+
+function showRouteError(message) {
+  $('routeErrorMessage').textContent = message;
+  show('route-error');
+}
+
+function applyPendingCaseRoute() {
+  if (pendingRoute.type !== ROUTE_TYPES.case) return false;
+  const item = dataAccess.cases.get(pendingRoute.caseId);
+  const decision = evaluateCaseRoute(item, sessionRole, item ? ownsCase(item) : false);
+  if (!decision.ok) showRouteError(decision.message);
+  else openDetail(item.id);
+  return true;
+}
+
+function goHomeFromRoute() {
+  pendingRoute = { type:ROUTE_TYPES.none };
+  history.replaceState({}, '', clearAppRoute(location.href));
+  show('home');
+}
+
+function showResidentRoute(token) {
+  residentRouteCase = dataAccess.residentAccess.getByToken(token);
+  const access = residentAccessStatus(residentRouteCase);
+  $('loginView').classList.add('hidden');
+  $('appRoot').classList.add('hidden');
+  $('residentPublicView').classList.remove('hidden');
+  $('residentPublicComplete').classList.add('hidden');
+  $('residentPublicError').classList.toggle('hidden', access.status === 'open');
+  $('residentPublicFormPanel').classList.toggle('hidden', access.status !== 'open');
+  if (access.status !== 'open') {
+    $('residentPublicErrorMessage').textContent = access.message;
+    $('residentPublicProperty').textContent = '';
+    $('residentPublicRoom').textContent = '';
+    return;
+  }
+  $('residentPublicProperty').textContent = residentRouteCase.property;
+  $('residentPublicRoom').textContent = residentRouteCase.room;
+  const form = $('residentPublicForm');
+  form.reset();
+  form.elements.d1.value = plusDays(2);
+  form.elements.d2.value = plusDays(4);
 }
 
 function setScheduleMode(mode) {
@@ -931,6 +1076,7 @@ function activateSession(session) {
   $('loginView').classList.add('hidden');
   $('appRoot').classList.remove('hidden');
   show('home');
+  applyPendingCaseRoute();
 }
 
 async function handleLogin(event) {
@@ -1353,6 +1499,17 @@ async function init() {
   $('lifecycleActionModal').addEventListener('click', event => { if (event.target === $('lifecycleActionModal')) closeLifecycleAction(); });
   $('lifecycleActionForm').addEventListener('submit', saveLifecycleAction);
   $('residentForm').addEventListener('submit', saveResidentResponse);
+  $('residentPublicForm').addEventListener('submit', savePublicResidentResponse);
+  $('routeErrorHome').addEventListener('click', goHomeFromRoute);
+  $('closeResidentQr').addEventListener('click', closeResidentQr);
+  $('residentQrModal').addEventListener('click', event => { if (event.target === $('residentQrModal')) closeResidentQr(); });
+  $('copyResidentUrl').addEventListener('click', () => copyText($('residentQrUrl').value, '入居者回答URLをコピーしました。'));
+  $('copyResidentGuide').addEventListener('click', () => {
+    const item = currentResidentQrCase();
+    if (item) copyText(residentGuide(item, $('residentQrUrl').value), '入居者向け案内文をコピーしました。');
+  });
+  $('toggleResidentAccess').addEventListener('click', toggleResidentAccess);
+  $('regenerateResidentAccess').addEventListener('click', regenerateResidentAccess);
   $('scheduleProperty').addEventListener('change', renderSchedule);
   document.querySelectorAll('[data-schedule-mode]').forEach(button => button.addEventListener('click', () => setScheduleMode(button.dataset.scheduleMode)));
   $('scheduleStaff').addEventListener('change', renderStaffSchedule);
@@ -1379,6 +1536,7 @@ async function init() {
     renderCases(); renderHome();
     notify('初期状態に戻しました。');
   });
+  if (pendingRoute.type === ROUTE_TYPES.resident) return showResidentRoute(pendingRoute.residentToken);
   const session = getSession();
   session && USERS.includes(session.user) ? activateSession(session) : showLogin();
 }
