@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { createBearerAuthProvider } from '../src/auth.js';
+import { createFakeIdentityProvider } from '../src/auth/identity-provider.js';
 import { createPostgresUserStore } from '../src/auth/postgres-user-store.js';
 import { hashPassword, verifyPassword } from '../src/auth/password-service.js';
 import { createApiService } from '../src/services/api-service.js';
@@ -14,7 +16,6 @@ const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const integrationEnabled = Boolean(process.env.TEST_DATABASE_URL) && process.env.ALLOW_DATABASE_RESET === 'true';
 const admin = { id:'nishiyama', name:'西山さん', role:'admin' };
 const office = { id:'office', name:'事務所', role:'office' };
-const worker = { id:'worker-a', name:'職人A', role:'worker' };
 
 test('PostgreSQL providerが既存Store contractとtransaction境界を実装する', async () => {
   const fakePool = { query() { throw new Error('query should not run'); }, connect() { throw new Error('connect should not run'); }, async end() {} };
@@ -59,6 +60,7 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
   await pool.query('TRUNCATE auth_users, photo_metadata, audit_logs, schedule_history, workflow_history, responses, cases, staff, rooms, properties RESTART IDENTITY CASCADE');
   let provider = createPostgresProvider({ pool });
   let userStore = createPostgresUserStore({ pool });
+  let worker;
 
   const seed = async target => {
     await target.properties.create({ id:'property-001', name:'○○マンション', address:'東京都○○区', managementCompany:'○○管理', ownerName:'', active:true, parkingInfo:'1台', version:1 });
@@ -93,6 +95,18 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     assert.equal(updated.version, 2);
     await assert.rejects(() => userStore.update(created.id, { active:false }, { expectedVersion:1 }), error => error.code === 'CONFLICT');
     await assert.rejects(() => userStore.create({ ...created, id:'auth-duplicate', passwordHash:credentials.passwordHash }), error => error.code === 'CONFLICT');
+
+    const workerCredentials = await hashPassword('postgres-worker-password');
+    const storedWorker = await userStore.create({
+      id:'auth-postgres-worker', loginId:'postgres-worker', email:'postgres-worker@example.test', displayName:'職人A',
+      role:'worker', staffId:'staff-worker-a', active:true, ...workerCredentials, version:1
+    });
+    assert.equal(storedWorker.staffId, 'staff-worker-a');
+    const identityProvider = createFakeIdentityProvider({ secret:Buffer.alloc(32, 9) });
+    const customToken = await identityProvider.createCustomToken(storedWorker.id);
+    const idToken = await identityProvider.exchangeCustomToken(customToken);
+    worker = await createBearerAuthProvider({ identityProvider, userStore }).authenticate({ headers:{ authorization:`Bearer ${idToken}` } });
+    assert.deepEqual(worker, { id:'auth-postgres-worker', name:'職人A', role:'worker', staffId:'staff-worker-a' });
   });
 
   await t.test('CRUDと可変field保持', async () => {
@@ -154,7 +168,8 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     const accepted = await service.createPublicResponse('postgres-resident-token', { name:'山田太郎', phone:'000-0000-0000', d1:'2026-09-15', t1:'午前', d2:'2026-09-16', t2:'午後', note:'連絡事項' });
     assert.equal(accepted.accepted, true);
     await service.createPhoto('case-001', { group:'after', name:'after.jpg', mimeType:'image/jpeg', size:1234 }, worker);
-    assert.equal((await service.listCases(worker)).length, 1);
+    assert.equal((await provider.photos.list()).some(photo => photo.name === 'after.jpg'), true);
+    assert.deepEqual((await service.listCases(worker)).map(item => item.id), ['case-001']);
     await assert.rejects(() => service.getCase('case-foreign', worker), error => error.code === 'FORBIDDEN');
   });
 
@@ -172,6 +187,8 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     const authUser = await userStore.findByIdentifier('postgres-admin');
     assert.equal(authUser.displayName, '永続管理者');
     assert.equal(authUser.version, 2);
+    const authWorker = await userStore.findByIdentifier('postgres-worker');
+    assert.equal(authWorker.staffId, 'staff-worker-a');
   });
   await provider.close();
 });
