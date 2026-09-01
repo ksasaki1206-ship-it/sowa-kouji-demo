@@ -59,6 +59,32 @@ test('login試行制限migrationはraw identifierを保存せず共有lockを保
   assert.doesNotMatch(sql, /login_id|email|password/i);
 });
 
+test('PostgreSQL login lock queryは日時parameterをtimestamptzへ明示変換する', async () => {
+  let captured;
+  const fakePool = {
+    async query(sql, values) {
+      captured = { sql, values };
+      return { rows:[{
+        failed_count:1,
+        window_started_at:new Date('2026-09-02T00:00:00.000Z'),
+        locked_until:null,
+        updated_at:new Date('2026-09-02T00:00:00.000Z')
+      }] };
+    },
+    async end() {}
+  };
+  const store = createPostgresUserStore({ pool:fakePool });
+  await store.recordLoginFailure('user:auth-test', {
+    now:Date.parse('2026-09-02T00:00:00.000Z'), windowMs:60_000, lockMs:120_000, maxFailures:3
+  });
+  assert.match(captured.sql, /\$2::timestamptz/);
+  assert.match(captured.sql, /\$3::timestamptz/);
+  assert.match(captured.sql, /\$5::timestamptz/);
+  assert.equal(captured.values[1] instanceof Date, true);
+  assert.equal(captured.values[2] instanceof Date, true);
+  assert.equal(captured.values[4] instanceof Date, true);
+});
+
 test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integrationEnabled ? false : 'TEST_DATABASE_URLとALLOW_DATABASE_RESET=trueが必要です' }, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
   const ssl = process.env.TEST_DATABASE_SSL === 'true';

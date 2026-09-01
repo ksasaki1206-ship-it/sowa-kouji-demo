@@ -79,24 +79,24 @@ export function createPostgresUserStore({ pool, connectionString, poolConfig, ss
       const newLockedUntil = new Date(at.getTime() + lockMs);
       const result = await executor.query(`INSERT INTO auth_login_attempts
         (subject_hash, failed_count, window_started_at, locked_until, updated_at)
-        VALUES ($1,1,$2,CASE WHEN $4 <= 1 THEN $5 ELSE NULL END,$2)
+        VALUES ($1,1,$2::timestamptz,CASE WHEN $4 <= 1 THEN $5::timestamptz ELSE NULL::timestamptz END,$2::timestamptz)
         ON CONFLICT (subject_hash) DO UPDATE SET
           failed_count = CASE
-            WHEN auth_login_attempts.locked_until > $2 THEN auth_login_attempts.failed_count
-            WHEN auth_login_attempts.window_started_at <= $3 THEN 1
+            WHEN auth_login_attempts.locked_until > $2::timestamptz THEN auth_login_attempts.failed_count
+            WHEN auth_login_attempts.window_started_at <= $3::timestamptz THEN 1
             ELSE auth_login_attempts.failed_count + 1
           END,
           window_started_at = CASE
-            WHEN auth_login_attempts.locked_until > $2 THEN auth_login_attempts.window_started_at
-            WHEN auth_login_attempts.window_started_at <= $3 THEN $2
+            WHEN auth_login_attempts.locked_until > $2::timestamptz THEN auth_login_attempts.window_started_at
+            WHEN auth_login_attempts.window_started_at <= $3::timestamptz THEN $2::timestamptz
             ELSE auth_login_attempts.window_started_at
           END,
           locked_until = CASE
-            WHEN auth_login_attempts.locked_until > $2 THEN auth_login_attempts.locked_until
-            WHEN (CASE WHEN auth_login_attempts.window_started_at <= $3 THEN 1 ELSE auth_login_attempts.failed_count + 1 END) >= $4 THEN $5
+            WHEN auth_login_attempts.locked_until > $2::timestamptz THEN auth_login_attempts.locked_until
+            WHEN (CASE WHEN auth_login_attempts.window_started_at <= $3::timestamptz THEN 1 ELSE auth_login_attempts.failed_count + 1 END) >= $4 THEN $5::timestamptz
             ELSE NULL
           END,
-          updated_at = $2
+          updated_at = $2::timestamptz
         RETURNING *`, [attemptHash(subject), at, windowCutoff, Number(maxFailures), newLockedUntil]);
       return attemptFromRow(result.rows[0]);
     },
