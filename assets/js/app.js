@@ -235,23 +235,43 @@ function monthDays() {
   });
 }
 
+function scheduleTable(cases, days) {
+  return `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><b>${esc(c.room)}</b><br><span class="muted">${esc(c.residentName || '未登録')}</span></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event survey open-case" data-id="${esc(c.id)}">現調<br>${esc(c.surveyAt.slice(11,16))}</a>` : ''}${datePart(c.workAt) === d.key ? `<a href="#case-${encodeURIComponent(c.id)}" class="schedule-event work open-case" data-id="${esc(c.id)}">工事<br>${esc(c.workAt.slice(11,16))}</a>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+function alignScheduleToToday(scroll) {
+  const todayCell = scroll.querySelector(`thead th:nth-child(${new Date().getDate() + 1})`);
+  if (todayCell) scroll.scrollLeft = Math.max(0, todayCell.offsetLeft - 190);
+}
+
 function renderSchedule() {
   const select = $('scheduleProperty');
   const props = properties();
-  const previous = select.value;
-  populateSelect(select, props);
-  select.value = props.includes(previous) ? previous : props[0] || '';
-  const cases = state.cases.filter(c => c.property === select.value).sort((a,b) => a.room.localeCompare(b.room, 'ja', {numeric:true}));
+  const previous = select.value || 'all';
+  populateSelect(select, props, '全物件');
+  select.value = previous === 'all' || props.includes(previous) ? previous : 'all';
+  const selectedProperties = select.value === 'all' ? props : [select.value];
+  const cases = state.cases.filter(c => selectedProperties.includes(c.property));
   $('scheduleSummary').innerHTML = [
     ['回答待ち', cases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length],
     ['現調未確定', cases.filter(c => !c.surveyAt).length],
     ['施工未確定', cases.filter(c => !c.workAt).length]
   ].map(([label,count]) => `<div class="summary"><span class="k">${label}</span><b>${count}</b><span class="muted">室</span></div>`).join('');
   const days = monthDays();
-  $('scheduleWrap').innerHTML = cases.length ? `<table class="schedule"><thead><tr><th class="room-head">部屋 / 入居者</th>${days.map(d => `<th class="${d.weekend ? 'weekend' : ''}">${d.day}<br>${d.weekday}</th>`).join('')}</tr></thead><tbody>${cases.map(c => `<tr><th class="room-head"><b>${esc(c.room)}</b><br><span class="muted">${esc(c.residentName || '未登録')}</span></th>${days.map(d => `<td class="${d.weekend ? 'weekend' : ''}">${datePart(c.surveyAt) === d.key ? `<button class="schedule-event survey open-case" data-id="${esc(c.id)}">現調<br>${esc(c.surveyAt.slice(11,16))}</button>` : ''}${datePart(c.workAt) === d.key ? `<button class="schedule-event work open-case" data-id="${esc(c.id)}">工事<br>${esc(c.workAt.slice(11,16))}</button>` : ''}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="empty">この物件の案件はありません。</div>';
+  const mobile = window.matchMedia('(max-width: 700px)').matches;
+  $('scheduleWrap').innerHTML = selectedProperties.map((property, index) => {
+    const propertyCases = cases.filter(c => c.property === property).sort((a,b) => a.room.localeCompare(b.room, 'ja', {numeric:true}));
+    const waiting = propertyCases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length;
+    const undecided = propertyCases.filter(c => !c.surveyAt || !c.workAt).length;
+    const open = !mobile || select.value !== 'all' || index === 0;
+    return `<details class="schedule-group" ${open ? 'open' : ''}><summary><span><b>${esc(property)}</b><span class="muted">${propertyCases.length}室</span></span><span class="group-status">${waiting ? `<span class="badge wait">回答待ち ${waiting}</span>` : ''}${undecided ? `<span class="badge">未確定 ${undecided}</span>` : ''}<span class="chevron" aria-hidden="true">⌄</span></span></summary><div class="schedule-scroll">${propertyCases.length ? scheduleTable(propertyCases, days) : '<div class="empty">案件はありません。</div>'}</div></details>`;
+  }).join('') || '<div class="card empty">表示できる物件がありません。</div>';
   wireCaseLinks($('scheduleWrap'));
-  const todayCell = $('scheduleWrap').querySelector(`thead th:nth-child(${new Date().getDate() + 1})`);
-  if (todayCell) $('scheduleWrap').scrollLeft = Math.max(0, todayCell.offsetLeft - 130);
+  $('scheduleWrap').querySelectorAll('.schedule-group').forEach(group => {
+    const scroll = group.querySelector('.schedule-scroll');
+    if (group.open) alignScheduleToToday(scroll);
+    group.addEventListener('toggle', () => { if (group.open) alignScheduleToToday(scroll); });
+  });
 }
 
 function setResponseMode(mode) {
@@ -330,6 +350,9 @@ function init() {
   $('scheduleProperty').addEventListener('change', renderSchedule);
   $('historyUser').addEventListener('change', renderHistory);
   $('historyProperty').addEventListener('change', renderHistory);
+  window.addEventListener('hashchange', () => {
+    if (location.hash.startsWith('#case-')) openDetail(decodeURIComponent(location.hash.slice(6)));
+  });
   $('resetDemo').addEventListener('click', () => {
     if (!confirm('デモ内容と写真、変更履歴を初期状態に戻しますか？')) return;
     state = resetState();
