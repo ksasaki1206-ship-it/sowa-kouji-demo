@@ -1,7 +1,7 @@
-import { USERS, STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
+import { STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
 import { loadState, saveState, resetState } from './storage.js';
 import { addAudit, auditChanges } from './audit.js';
-import { getSession, login, logout as clearSession } from './auth.js';
+import { USERS, getSession, login, logout as clearSession } from './auth.js';
 
 let state = loadState();
 let currentCaseId = null;

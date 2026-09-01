@@ -1,5 +1,6 @@
+import { USERS } from './auth.js';
+
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
-export const USERS = ['西山さん', '高橋さん', '事務所', '職人A'];
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
 export const SURVEY_STAFF = ['未定', '西山さん', '高橋さん', '佐藤', '鈴木', '田中'];
 export const WORK_STAFF = ['未定', '山田班', '高橋班', '佐々木班', '職人A'];
