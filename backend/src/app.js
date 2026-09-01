@@ -12,12 +12,12 @@ function sendData(response, data, status = 200) {
   sendJson(response, status, payload);
 }
 
-async function readJson(request) {
+async function readJson(request, maxBytes = 1024 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 1024 * 1024) throw validationError('リクエストサイズが大きすぎます。');
+    if (size > maxBytes) throw validationError('リクエストサイズが大きすぎます。');
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
@@ -37,7 +37,7 @@ function applyCors(request, response, allowedOrigins) {
 
 const route = (method, pattern, action, options = {}) => ({ method, pattern, action, ...options });
 
-export function createApp({ service, authProvider, authService = null, allowedOrigins = [] }) {
+export function createApp({ service, authProvider, authService = null, allowedOrigins = [], photoUploadBodyLimitBytes = 6 * 1024 * 1024 }) {
   const formalAuth = () => {
     if (!authService) throw notFoundError('正式認証endpointは現在のmodeでは利用できません。');
     return authService;
@@ -70,7 +70,7 @@ export function createApp({ service, authProvider, authService = null, allowedOr
     route('GET', /^\/api\/v1\/cases\/([^/]+)\/workflow-history$/, ({ service, user, params }) => service.listWorkflow(params[0], user)),
     route('GET', /^\/api\/v1\/cases\/([^/]+)\/schedule-history$/, ({ service, user, params }) => service.listScheduleHistory(params[0], user)),
     route('GET', /^\/api\/v1\/cases\/([^/]+)\/photos$/, ({ service, user, params }) => service.listPhotos(params[0], user)),
-    route('POST', /^\/api\/v1\/cases\/([^/]+)\/photos$/, ({ service, user, params, body }) => service.createPhoto(params[0], body, user), { created:true, body:true }),
+    route('POST', /^\/api\/v1\/cases\/([^/]+)\/photos$/, ({ service, user, params, body }) => service.createPhoto(params[0], body, user), { created:true, body:true, bodyLimit:photoUploadBodyLimitBytes }),
     route('DELETE', /^\/api\/v1\/cases\/([^/]+)\/photos\/([^/]+)$/, ({ service, user, params }) => service.removePhoto(params[0], params[1], user)),
     route('GET', /^\/api\/v1\/public\/resident\/([^/]+)$/, ({ service, params }) => service.getPublicResident(params[0]), { public:true }),
     route('POST', /^\/api\/v1\/public\/resident\/([^/]+)\/responses$/, ({ service, params, body }) => service.createPublicResponse(params[0], body), { public:true, created:true, body:true })
@@ -89,7 +89,7 @@ export function createApp({ service, authProvider, authService = null, allowedOr
       const match = url.pathname.match(selected.pattern);
       const params = match.slice(1).map(value => decodeURIComponent(value));
       const user = selected.public ? null : await authenticateRequest(request, authProvider);
-      const body = selected.body ? await readJson(request) : undefined;
+      const body = selected.body ? await readJson(request, selected.bodyLimit) : undefined;
       const data = await selected.action({ service, user, params, body, request });
       sendData(response, data, selected.created ? 201 : 200);
     } catch (error) {

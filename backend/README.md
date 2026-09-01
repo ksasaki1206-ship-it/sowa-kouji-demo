@@ -1,6 +1,6 @@
-# sowa-kouji-api 第4-B3B-1 Identity Platform接続準備
+# sowa-kouji-api 第4-B4A Cloud Storage写真共有基盤
 
-Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化とB3Aの正式認証境界を維持し、B3B-1ではFirebase Admin SDKによるcustom token発行・ID token検証、公開Web設定、Cloud SQL Unix socket設定、DB共有のlogin試行制限を追加しました。Cloud Runへのdeploy、IAM変更、Secret Manager登録、写真binary保存はまだ行いません。
+Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化と正式認証境界を維持し、第4-B4AではHTTP正式modeの写真本体をprivate Google Cloud Storageへ保存するadapter境界を追加しました。Cloud Runへの再deploy、bucket作成、IAM変更、Secret Manager登録はこの工程では行いません。
 
 ## 構造
 
@@ -18,6 +18,8 @@ Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化
 - `src/providers/contracts.js`: Case / Property / Room / Staff / Response / Audit / Photo Store契約
 - `src/providers/memory-provider.js`: API契約・unit test用の非永続provider
 - `src/providers/postgres-provider.js`: `pg` だけを使う共有永続provider
+- `src/photo-storage/photo-binary-store.js`: 写真binaryの `put / createReadUrl / remove` 契約とtest用memory実装
+- `src/photo-storage/gcs-photo-binary-store.js`: ADCを使うprivate GCS adapter
 - `src/db/migrate.js`: version管理されたSQL migration runner
 - `db/migrations/`: 適用順序をファイル名で固定したmigration
 
@@ -41,7 +43,7 @@ Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化
 | `auth_users` | 不変id、unique login_id、nullable unique email、表示名、role、staff_id、active、scrypt情報、password変更日時、version |
 | `auth_login_attempts` | SHA-256化したlogin subject、失敗回数、集計window、一時lock期限 |
 
-`rooms → properties`、`cases → properties/rooms`、`responses/workflow_history/schedule_history/photo_metadata → cases` にFKがあります。空文字またはlegacy担当IDを維持するため、現段階では案件の担当者IDに厳格なFKを付けずserviceで整合確認します。物理削除APIは追加せず、案件はlifecycle/アーカイブ、マスタは `active=false` を維持します。写真APIのDELETEは既存どおりmetadataだけが対象です。
+`rooms → properties`、`cases → properties/rooms`、`responses/workflow_history/schedule_history/photo_metadata → cases` にFKがあります。空文字またはlegacy担当IDを維持するため、現段階では案件の担当者IDに厳格なFKを付けずserviceで整合確認します。物理削除APIは追加せず、案件はlifecycle/アーカイブ、マスタは `active=false` を維持します。写真削除はmetadataと外部objectを二段階で処理します。
 
 ## 更新競合とtransaction
 
@@ -53,7 +55,7 @@ Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化
 
 ## 設定とmigration
 
-Node.js 20以上（Cloud Run imageはNode.js 22）、PostgreSQL 17相当を基準にします。DB接続は `pg`、正式Identity接続は `firebase-admin` を利用し、大型ORMは導入しません。
+Node.js 22以上、PostgreSQL 17相当を基準にします。DB接続は `pg`、正式Identity接続は `firebase-admin`、写真objectは `@google-cloud/storage` を利用し、大型ORMは導入しません。Cloud Run imageでは直接利用しないoptional依存を除外してinstallします。
 
 ```sh
 npm ci
@@ -167,9 +169,22 @@ APIの成功・一覧・error形式と `/api/v1` endpointは維持していま�
 
 現在のmock認証はdevelopment専用です。password、password hash、session、認証秘密情報は案件等の業務tableやSheets同期対象へ保存しません。
 
-写真はmetadataだけをPostgreSQLへ保存します。Data URL、画像binary、credentialは保存しません。共有画像本体は第4-Cで専用object storage/Drive providerへ接続します。
+local demoの写真は従来どおりlocalStorageのData URLです。HTTP正式modeはFrontendで900px・JPEG quality 0.72へ圧縮し、写真専用POST endpointだけ通常1MBより大きいJSON body上限を利用します。既定の圧縮後上限は4MBです。
 
-## B3B-2で必要なGoogle Cloud設定
+BackendはJPEG Data URLを厳格にdecodeし、`cases/<caseId>/<group>/<random-id>.jpg` のサーバー生成keyでprivate GCSへ保存します。PostgreSQLの `photo_metadata` には実byte size、`storageProvider=gcs`、`storageKey`だけを保存し、Data URL・signed URL・binaryは保存しません。一覧取得時だけ10分（設定可能）のV4 read signed URLを `source` として返します。
+
+削除は、metadataを `deletionPending` にして一覧から先に除外し、GCS objectを削除した後にmetadataを物理削除します。GCS障害時はpending metadataとstorageKeyを残すため同じDELETEを再試行でき、破損URLは画面へ返しません。object削除はnot-foundを成功扱いにします。upload後にDB transactionが失敗した場合はobject削除を補償実行し、参照のないorphanが残る可能性を破損参照より優先して最小化します。
+
+```text
+PHOTO_STORAGE=gcs
+PHOTO_BUCKET=<private bucket name>
+PHOTO_MAX_BYTES=4194304
+PHOTO_READ_URL_TTL_SECONDS=600
+```
+
+`PHOTO_STORAGE=gcs` でbucket未設定、またはproduction正式認証でGCS以外を指定した場合は起動時にfail closedします。service account JSONやprivate keyは使わずCloud RunのApplication Default Credentialsを利用します。
+
+## B4B実Cloud Storage接続で必要なGoogle Cloud設定
 
 - Cloud Run service identityへCloud SQL Clientとcustom token署名に必要な最小権限を付与する
 - `iam.serviceAccounts.signBlob` が必要な署名対象service accountを明確にし、過剰なService Account Token Creator付与を避ける
@@ -178,8 +193,13 @@ APIの成功・一覧・error形式と `/api/v1` endpointは維持していま�
 - production CORSを `https://ksasaki1206-ship-it.github.io` の完全一致だけにする
 - migrationを専用jobで適用し、one-time bootstrapを実施する
 - stagingでcustom token発行、Web SDK交換、Bearer検証、role/staffId再取得を実接続確認する
+- regional private bucketを作成し、Uniform bucket-level accessとPublic Access Preventionを有効にする
+- Cloud Run service identityへ対象bucket限定のStorage Object Admin相当権限を付与する
+- V4 signed URL生成に必要な `iam.serviceAccounts.signBlob` を署名service accountへ最小範囲で付与する
+- Cloud Runへ `PHOTO_STORAGE=gcs`、`PHOTO_BUCKET`、上限・TTLを設定して再deployする
+- admin / office / 担当workerでupload・別端末表示・削除・再読込を実接続確認する
 
-Google Cloud resource作成、IAM変更、credential生成、Secret Manager登録、deploy、実token発行はB3B-1では行っていません。
+Google Cloud resource作成、IAM変更、credential生成、Secret Manager登録、再deploy、実GCS接続はB4Aでは行っていません。
 
 ## Secret・Cloud SQL・backup方針
 

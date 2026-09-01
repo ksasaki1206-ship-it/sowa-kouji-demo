@@ -25,5 +25,10 @@ for (const scheme of ['bearerAuth','mockUser']) assert.match(source, new RegExp(
 assert.match(source, /additionalProperties: false[\s\S]*required: \[propertyName, roomName, accepting, closed\]/);
 for (const secretField of ['passwordHash','passwordSalt','passwordParams']) assert.doesNotMatch(source, new RegExp(`\\b${secretField}\\b`));
 assert.doesNotMatch(source, /BEGIN (RSA |EC )?PRIVATE KEY|client_secret|service_account|AIza[0-9A-Za-z_-]{20,}/i);
+assert.match(source, /required: \[group, source, mimeType\]/);
+assert.match(source, /V4|read URL|signed URL/i);
+const publicStart = source.indexOf('  /public/resident/{token}:');
+const publicEnd = source.indexOf('  /public/resident/{token}/responses:', publicStart);
+assert.doesNotMatch(source.slice(publicStart, publicEnd), /photo|source|storageKey/i);
 
 console.log('openapi contract tests: ok');

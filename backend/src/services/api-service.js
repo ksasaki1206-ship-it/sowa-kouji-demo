@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { requireRole } from '../auth.js';
-import { conflictError, forbiddenError, notFoundError, validationError } from '../errors.js';
+import { conflictError, forbiddenError, internalError, notFoundError, validationError } from '../errors.js';
+import { assertPhotoBinaryStore, createMemoryPhotoBinaryStore } from '../photo-storage/photo-binary-store.js';
+import { createPhotoObjectKey, decodeJpegDataUrl, DEFAULT_PHOTO_MAX_BYTES } from '../photo-storage/photo-upload.js';
 
 const resourceId = prefix => `${prefix}-${randomUUID()}`;
 const requiredString = (body, key, label) => {
@@ -38,7 +40,8 @@ function caseSummary(item) {
   return item;
 }
 
-export function createApiService(provider) {
+export function createApiService(provider, { photoBinaryStore = createMemoryPhotoBinaryStore(), photoMaxBytes = DEFAULT_PHOTO_MAX_BYTES, photoReadUrlTtlMs = 10 * 60 * 1000 } = {}) {
+  const binaryStore = assertPhotoBinaryStore(photoBinaryStore);
   const inTransaction = work => typeof provider.withTransaction === 'function' ? provider.withTransaction(work) : work(provider);
   const writeAudit = (targetProvider, user, item, detail) => targetProvider.audit.create({
     id:resourceId('audit'),
@@ -189,30 +192,84 @@ export function createApiService(provider) {
       return Array.isArray(item.scheduleHistory) ? item.scheduleHistory : [];
     },
     async listPhotos(caseId, user) {
+      requireRole(user, 'admin', 'office', 'worker');
       await getCase(provider, caseId, user);
-      return (await provider.photos.list()).filter(photo => photo.caseId === caseId);
+      const photos = (await provider.photos.list()).filter(photo => photo.caseId === caseId && photo.deletionPending !== true);
+      return Promise.all(photos.map(async photo => {
+        const metadata = { ...photo };
+        delete metadata.source;
+        if (!metadata.storageKey || metadata.storageProvider !== binaryStore.kind) return { ...metadata, source:'' };
+        try {
+          return { ...metadata, source:await binaryStore.createReadUrl(metadata.storageKey, { expiresInMs:photoReadUrlTtlMs }) };
+        } catch {
+          throw internalError('写真を読み込めませんでした。時間をおいて再度お試しください。');
+        }
+      }));
     },
     async createPhoto(caseId, body, user) {
-      return inTransaction(async tx => {
-        const item = await getCase(tx, caseId, user);
-        if (body?.source || body?.data || body?.content) throw validationError('第4-B2では写真本体を受け付けません。metadataのみ指定してください。');
-        const group = requiredString(body, 'group', '写真分類');
-        if (!['survey','before','during','after'].includes(group)) throw validationError('写真分類が不正です。', { field:'group' });
-        if ((await tx.photos.list()).filter(photo => photo.caseId === caseId && photo.group === group).length >= 8) throw conflictError('写真は分類ごとに8枚までです。');
-        const photo = await tx.photos.create({ id:body.id || resourceId('photo'), caseId, group, name:body.name || 'photo.jpg', mimeType:body.mimeType || 'image/jpeg', size:Number(body.size || 0), storageProvider:'mock', storageKey:'', version:1 });
-        await writeAudit(tx, user, item, `${group}写真メタデータを追加`);
-        return photo;
-      });
+      requireRole(user, 'admin', 'office', 'worker');
+      await getCase(provider, caseId, user);
+      const group = requiredString(body, 'group', '写真分類');
+      if (!['survey','before','during','after'].includes(group)) throw validationError('写真分類が不正です。', { field:'group' });
+      if (body?.mimeType !== 'image/jpeg') throw validationError('対応している写真形式はJPEGだけです。', { field:'mimeType' });
+      const bytes = decodeJpegDataUrl(body?.source, { maxBytes:photoMaxBytes });
+      const currentCount = (await provider.photos.list()).filter(photo => photo.caseId === caseId && photo.group === group && photo.deletionPending !== true).length;
+      if (currentCount >= 8) throw conflictError('写真は分類ごとに8枚までです。');
+      const storageKey = createPhotoObjectKey(caseId, group);
+      try {
+        await binaryStore.put({ key:storageKey, bytes, mimeType:'image/jpeg' });
+      } catch {
+        throw internalError('写真を保存できませんでした。時間をおいて再度お試しください。');
+      }
+      try {
+        return await inTransaction(async tx => {
+          const item = await getCase(tx, caseId, user);
+          const count = (await tx.photos.list()).filter(photo => photo.caseId === caseId && photo.group === group && photo.deletionPending !== true).length;
+          if (count >= 8) throw conflictError('写真は分類ごとに8枚までです。');
+          const photo = await tx.photos.create({
+            id:resourceId('photo'), caseId, group, name:String(body?.name || 'photo.jpg').slice(0, 255), mimeType:'image/jpeg', size:bytes.length,
+            storageProvider:binaryStore.kind, storageKey, version:1
+          });
+          await writeAudit(tx, user, item, `${group}写真を追加`);
+          return photo;
+        });
+      } catch (error) {
+        try { await binaryStore.remove(storageKey); } catch {}
+        throw error;
+      }
     },
     async removePhoto(caseId, photoId, user) {
-      return inTransaction(async tx => {
+      requireRole(user, 'admin', 'office', 'worker');
+      const marked = await inTransaction(async tx => {
         const item = await getCase(tx, caseId, user);
         const photo = await tx.photos.get(photoId);
         if (!photo || photo.caseId !== caseId) throw notFoundError('写真メタデータが見つかりません。');
-        await tx.photos.remove(photoId);
-        await writeAudit(tx, user, item, '写真メタデータを削除');
-        return { id:photoId, deleted:true };
+        if (!photo.storageKey || photo.storageProvider !== binaryStore.kind) {
+          await tx.photos.remove(photoId);
+          await writeAudit(tx, user, item, '写真を削除');
+          return { ...photo, metadataRemoved:true };
+        }
+        const pending = photo.deletionPending === true
+          ? photo
+          : await tx.photos.update(photoId, { deletionPending:true }, { expectedVersion:photo.version });
+        if (photo.deletionPending !== true) await writeAudit(tx, user, item, '写真を削除');
+        return pending;
       });
+      if (marked.metadataRemoved) return { id:photoId, deleted:true };
+      try {
+        await binaryStore.remove(marked.storageKey);
+      } catch {
+        throw internalError('写真ファイルを削除できませんでした。再度お試しください。');
+      }
+      try {
+        await inTransaction(async tx => {
+          const current = await tx.photos.get(photoId);
+          if (current) await tx.photos.remove(photoId);
+        });
+      } catch {
+        throw internalError('写真の削除処理を完了できませんでした。再度お試しください。');
+      }
+      return { id:photoId, deleted:true };
     },
     async getPublicResident(token) {
       return (await getPublicResidentInfo(provider, token)).publicInfo;

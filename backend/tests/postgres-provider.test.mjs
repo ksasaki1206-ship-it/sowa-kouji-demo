@@ -205,8 +205,12 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     await provider.cases.update('case-001', { status:'施工予定' }, { expectedVersion:reopened.version });
     const accepted = await service.createPublicResponse('postgres-resident-token', { name:'山田太郎', phone:'000-0000-0000', d1:'2026-09-15', t1:'午前', d2:'2026-09-16', t2:'午後', note:'連絡事項' });
     assert.equal(accepted.accepted, true);
-    await service.createPhoto('case-001', { group:'after', name:'after.jpg', mimeType:'image/jpeg', size:1234 }, worker);
-    assert.equal((await provider.photos.list()).some(photo => photo.name === 'after.jpg'), true);
+    await service.createPhoto('case-001', { group:'after', source:'data:image/jpeg;base64,/9j/2Q==', name:'after.jpg', mimeType:'image/jpeg', size:1234 }, worker);
+    const persistedPhoto = (await provider.photos.list()).find(photo => photo.name === 'after.jpg');
+    assert.equal(persistedPhoto.storageProvider, 'memory');
+    assert.match(persistedPhoto.storageKey, /^cases\/case-001\/after\/[0-9a-f]{32}\.jpg$/);
+    assert.equal(persistedPhoto.size, 4);
+    assert.equal(Object.hasOwn(persistedPhoto, 'source'), false);
     assert.deepEqual((await service.listCases(worker)).map(item => item.id), ['case-001']);
     await assert.rejects(() => service.getCase('case-foreign', worker), error => error.code === 'FORBIDDEN');
   });
@@ -221,7 +225,10 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     assert.equal(item.scheduleHistory.some(entry => entry.id === 'schedule-2'), true);
     assert.equal((await provider.responses.list()).length, 1);
     assert.equal((await provider.audit.list()).some(entry => entry.detail === '入居者回答を受信'), true);
-    assert.equal((await provider.photos.list()).some(photo => photo.name === 'after.jpg'), true);
+    const persistedPhoto = (await provider.photos.list()).find(photo => photo.name === 'after.jpg');
+    assert.ok(persistedPhoto);
+    assert.equal(persistedPhoto.storageKey.startsWith('cases/case-001/after/'), true);
+    assert.equal(Object.hasOwn(persistedPhoto, 'source'), false);
     const authUser = await userStore.findByIdentifier('postgres-admin');
     assert.equal(authUser.displayName, '永続管理者');
     assert.equal(authUser.version, 2);

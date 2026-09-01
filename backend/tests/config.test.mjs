@@ -44,3 +44,24 @@ test('正式認証modeはproductionでfake/memoryを拒否する', () => {
   const unconfigured = loadConfig({ AUTH_MODE:'identity', IDENTITY_PROVIDER:'unconfigured' });
   assert.equal(unconfigured.identityProvider, 'unconfigured');
 });
+
+test('写真storageはdevelopment memoryとproduction GCSを分離し設定不足時にfail closedになる', () => {
+  const development = loadConfig({});
+  assert.equal(development.photoStorage, 'memory');
+  assert.equal(development.photoMaxBytes, 4 * 1024 * 1024);
+  assert.equal(development.photoReadUrlTtlMs, 600000);
+  assert.ok(development.photoUploadBodyLimitBytes > development.photoMaxBytes);
+  assert.throws(() => loadConfig({ PHOTO_STORAGE:'gcs' }), /PHOTO_BUCKET/);
+  assert.throws(() => loadConfig({ PHOTO_STORAGE:'public' }), /PHOTO_STORAGE/);
+  assert.throws(() => loadConfig({ PHOTO_MAX_BYTES:'10' }), /PHOTO_MAX_BYTES/);
+  const productionBase = {
+    NODE_ENV:'production', AUTH_MODE:'identity', IDENTITY_PROVIDER:'firebase', IDENTITY_PROJECT_ID:'project-id',
+    IDENTITY_WEB_API_KEY:'placeholder-web-key', IDENTITY_AUTH_DOMAIN:'project-id.firebaseapp.com',
+    DATA_PROVIDER:'postgres', DATABASE_URL:'postgresql://placeholder.invalid/test'
+  };
+  assert.throws(() => loadConfig(productionBase), /PHOTO_STORAGE=gcs/);
+  const production = loadConfig({ ...productionBase, PHOTO_STORAGE:'gcs', PHOTO_BUCKET:'private-pilot-bucket', PHOTO_READ_URL_TTL_SECONDS:'900' });
+  assert.equal(production.photoStorage, 'gcs');
+  assert.equal(production.photoBucket, 'private-pilot-bucket');
+  assert.equal(production.photoReadUrlTtlMs, 900000);
+});

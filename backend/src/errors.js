@@ -22,3 +22,4 @@ export const unauthorizedError = (message = '認証が必要です。') => new A
 export const forbiddenError = (message = 'この操作を行う権限がありません。') => new ApiError(403, ERROR_CODES.FORBIDDEN, message);
 export const notFoundError = (message = '対象データが見つかりません。') => new ApiError(404, ERROR_CODES.NOT_FOUND, message);
 export const conflictError = (message, details) => new ApiError(409, ERROR_CODES.CONFLICT, message, details);
+export const internalError = (message = 'サーバー内部でエラーが発生しました。') => new ApiError(500, ERROR_CODES.INTERNAL_ERROR, message);

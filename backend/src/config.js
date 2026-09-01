@@ -45,6 +45,16 @@ export function loadConfig(env = process.env) {
   if (authMode === 'identity' && identityProvider === 'firebase' && (!identityProjectId || !identityWebApiKey || !identityAuthDomain)) {
     throw new Error('Firebase正式認証にはIDENTITY_PROJECT_ID、IDENTITY_WEB_API_KEY、IDENTITY_AUTH_DOMAINが必要です。');
   }
+  const photoStorage = String(env.PHOTO_STORAGE || 'memory').trim().toLowerCase();
+  if (!['memory','gcs'].includes(photoStorage)) throw new Error(`PHOTO_STORAGEが不正です: ${photoStorage}`);
+  const photoBucket = String(env.PHOTO_BUCKET || '').trim();
+  if (photoStorage === 'gcs' && !photoBucket) throw new Error('PHOTO_STORAGE=gcsではPHOTO_BUCKETが必要です。');
+  if (nodeEnv === 'production' && authMode === 'identity' && photoStorage !== 'gcs') throw new Error('productionの正式認証ではPHOTO_STORAGE=gcsが必要です。');
+  const photoMaxBytes = Number(env.PHOTO_MAX_BYTES || 4 * 1024 * 1024);
+  if (!Number.isInteger(photoMaxBytes) || photoMaxBytes < 64 * 1024 || photoMaxBytes > 10 * 1024 * 1024) throw new Error('PHOTO_MAX_BYTESが不正です。');
+  const photoReadUrlTtlSeconds = Number(env.PHOTO_READ_URL_TTL_SECONDS || 600);
+  if (!Number.isInteger(photoReadUrlTtlSeconds) || photoReadUrlTtlSeconds < 60 || photoReadUrlTtlSeconds > 3600) throw new Error('PHOTO_READ_URL_TTL_SECONDSが不正です。');
+  const photoUploadBodyLimitBytes = Math.ceil(photoMaxBytes * 4 / 3) + 256 * 1024;
   const loginMaxFailures = Number(env.LOGIN_MAX_FAILURES || 5);
   const loginFailureWindowMinutes = Number(env.LOGIN_FAILURE_WINDOW_MINUTES || 15);
   const loginLockMinutes = Number(env.LOGIN_LOCK_MINUTES || 15);
@@ -64,6 +74,11 @@ export function loadConfig(env = process.env) {
     identityProvider,
     identityProjectId,
     identityWebConfig:Object.freeze({ apiKey:identityWebApiKey, authDomain:identityAuthDomain, projectId:identityProjectId }),
+    photoStorage,
+    photoBucket,
+    photoMaxBytes,
+    photoReadUrlTtlMs:photoReadUrlTtlSeconds * 1000,
+    photoUploadBodyLimitBytes,
     loginProtection:Object.freeze({ maxFailures:loginMaxFailures, windowMs:loginFailureWindowMinutes * 60 * 1000, lockMs:loginLockMinutes * 60 * 1000 }),
     allowedOrigins,
     mockAuthEnabled:String(env.MOCK_AUTH_ENABLED || 'true') === 'true' && nodeEnv !== 'production'

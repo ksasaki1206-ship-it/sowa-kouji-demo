@@ -8,8 +8,12 @@ const arrays = groups => Object.fromEntries(groups.map(group => [group, []]));
 function normalizedRemoteCase(item, { photos = [], workflowHistory, scheduleHistory } = {}) {
   const base = createCase();
   const metadata = arrays(photoGroups);
-  for (const photo of photos || []) if (metadata[photo.group]) metadata[photo.group].push({ ...photo });
-  const sources = Object.fromEntries(photoGroups.map(group => [group, metadata[group].map(() => '')]));
+  const sources = arrays(photoGroups);
+  for (const photo of photos || []) if (metadata[photo.group]) {
+    const { source = '', ...photoMetadata } = photo;
+    metadata[photo.group].push(photoMetadata);
+    sources[photo.group].push(source);
+  }
   return {
     ...base,
     ...item,
@@ -23,9 +27,20 @@ function normalizedRemoteCase(item, { photos = [], workflowHistory, scheduleHist
 
 const mergeCase = (target, source) => {
   const photoMetadata = source?.photoMetadata || target?.photoMetadata;
-  const localPhotos = photoMetadata ? photoGroups.flatMap(group => (photoMetadata[group] || []).map(photo => ({ ...photo, group }))) : [];
+  const localPhotos = photoMetadata ? photoGroups.flatMap(group => (photoMetadata[group] || []).map((photo, index) => ({
+    ...photo,
+    group,
+    source:(source?.photos || target?.photos)?.[group]?.[index] || ''
+  }))) : [];
   Object.assign(target, normalizedRemoteCase({ ...target, ...source }, { photos:localPhotos, workflowHistory:source.workflowHistory, scheduleHistory:source.scheduleHistory }));
   return target;
+};
+
+const replaceRemotePhotos = (item, photos) => {
+  const normalized = normalizedRemoteCase(item, { photos, workflowHistory:item.workflowHistory, scheduleHistory:item.scheduleHistory });
+  item.photos = normalized.photos;
+  item.photoMetadata = normalized.photoMetadata;
+  return item;
 };
 
 const masterFallback = (cases, key, build) => [...new Map(cases.filter(item => item[key]).map(item => [item[key], build(item)])).values()];
@@ -201,22 +216,21 @@ export function createApplicationStore(provider) {
       if (!remote) return provider.photos.create(caseId, photo);
       const item = repositories.cases.get(current(), caseId);
       if (!item || !photoGroups.includes(photo.group) || item.photos[photo.group].length >= 8) return null;
-      const created = await provider.photos.create(caseId, { group:photo.group, name:photo.name, mimeType:photo.mimeType, size:photo.size });
-      item.photos[photo.group].push('');
-      item.photoMetadata[photo.group].push(created);
+      const created = await provider.photos.create(caseId, { group:photo.group, source:photo.source, name:photo.name, mimeType:photo.mimeType, size:photo.size });
+      replaceRemotePhotos(item, await provider.photos.list(caseId));
       await reloadAudit();
-      return { ...created, source:'' };
+      return repositories.photos.get(current(), caseId, created.id);
     },
     async remove(caseId, group, index) {
       if (!remote) return provider.photos.remove(caseId, group, index);
       const item = repositories.cases.get(current(), caseId);
       const metadata = item?.photoMetadata?.[group]?.[index];
       if (!metadata) return null;
+      const removedSource = item.photos[group][index] || '';
       await provider.photos.remove(caseId, metadata.id);
-      item.photos[group].splice(index, 1);
-      item.photoMetadata[group].splice(index, 1);
+      replaceRemotePhotos(item, await provider.photos.list(caseId));
       await reloadAudit();
-      return { ...metadata, caseId, group, source:'' };
+      return { ...metadata, caseId, group, source:removedSource };
     }
   });
 

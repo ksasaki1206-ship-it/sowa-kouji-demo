@@ -5,7 +5,7 @@ const REQUIRED_METHODS = Object.freeze({
   StaffStore:['list','get','create','update'],
   ResponseStore:['list','get','create','update'],
   AuditStore:['list','get','create'],
-  PhotoStore:['list','get','create','remove']
+  PhotoStore:['list','get','create','update','remove']
 });
 
 export function assertStoreContract(name, store) {

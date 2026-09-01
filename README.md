@@ -178,6 +178,19 @@ BackendのStore契約を維持したまま、`DATA_PROVIDER=memory` または `D
 
 設定、schema、migration、integration test、backup方針は `backend/README.md` を参照してください。Cloud Run/Cloud SQL作成、正式認証、写真binary共有は後工程です。
 
+## 第4-B4A弾の写真ファイル共有基盤
+
+local入口は従来のData URL＋localStorage写真を維持します。stagingのHTTP正式modeだけ、圧縮済みJPEGをBackendへ送り、注入可能な写真binary storeを経由してprivate Google Cloud Storageへ保存できる構造です。PostgreSQLには既存 `photo_metadata` のprovider/key/実byte sizeだけを保存し、写真本体・signed URLは保存しません。
+
+- object keyはBackendがrandom IDで生成し、元filenameをpathへ使わない
+- 一覧取得時だけ短時間のV4 read signed URLを返す
+- workerはstaffIdで担当案件だけ閲覧・追加・削除可能
+- public resident APIには写真情報を追加しない
+- 削除中の外部Storage障害はmetadataを非表示pending状態にして再試行可能にする
+- 通常JSONの1MB上限は維持し、写真POSTだけ圧縮後4MBに必要なbody上限を使う
+
+bucket作成、IAM付与、Cloud Run環境変数設定、再deployは次工程で行います。
+
 ## 第4-B3A弾の正式認証基盤
 
 GitHub Pagesの既定local modeと従来のデモ認証を維持しつつ、HTTP modeへ正式認証の境界を追加しました。

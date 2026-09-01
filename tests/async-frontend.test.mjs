@@ -13,6 +13,7 @@ import { createMemoryProvider } from '../backend/src/providers/memory-provider.j
 import { createApiService } from '../backend/src/services/api-service.js';
 
 const values = new Map();
+const JPEG_SOURCE = 'data:image/jpeg;base64,/9j/2Q==';
 globalThis.localStorage = {
   getItem:key => values.has(key) ? values.get(key) : null,
   setItem:(key, value) => values.set(key, String(value)),
@@ -87,10 +88,11 @@ test('property, room and staff masters use the same awaited provider boundary', 
   assert.equal(store.staff.get(staff.id).active, false);
 });
 
-test('photo metadata create/remove and public resident submission are asynchronous', async () => {
-  const created = await store.photos.create('case-001', { group:'after', name:'after.jpg', mimeType:'image/jpeg', size:12 });
-  assert.equal(created.source, '');
+test('photo binary create/list/remove and public resident submission are asynchronous', async () => {
+  const created = await store.photos.create('case-001', { group:'after', source:JPEG_SOURCE, name:'after.jpg', mimeType:'image/jpeg', size:12 });
+  assert.equal(created.source, JPEG_SOURCE);
   assert.equal(store.photos.list('case-001', 'after').length, 1);
+  assert.equal(store.photos.list('case-001', 'after')[0].source, JPEG_SOURCE);
   await store.photos.remove('case-001', 'after', 0);
   assert.equal(store.photos.list('case-001', 'after').length, 0);
   const info = await store.publicResident.get('demo-public-token-case-001');

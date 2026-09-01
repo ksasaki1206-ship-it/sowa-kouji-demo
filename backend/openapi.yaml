@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Sowa Kouji API
   version: v1
-  description: memory / PostgreSQL providerで共通利用するAPI契約。第4-B3B-1ではFirebase Identity Platform接続境界と公開Web設定を追加。写真binary共有は後工程。
+  description: memory / PostgreSQL providerで共通利用するAPI契約。正式認証とprivate object storage写真共有の境界を含む。
 servers:
   - url: https://api.example.invalid/api/v1
 security:
@@ -154,13 +154,25 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CaseId'
     get:
-      summary: 写真metadata一覧
+      summary: 写真一覧。権限確認後、保存写真だけ短時間のread URLをsourceへ設定する。
       responses:
         '200': { $ref: '#/components/responses/List' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
-      summary: 写真metadata登録。画像本体は第4-B2では受け付けない。
-      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      summary: 圧縮済みJPEG写真登録。写真POSTだけ専用body上限を利用する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [group, source, mimeType]
+              properties:
+                group: { type: string, enum: [survey, before, during, after] }
+                source: { type: string, description: JPEG Data URL。DBには保存しない。 }
+                mimeType: { type: string, const: image/jpeg }
+                name: { type: string, maxLength: 255 }
       responses:
         '201': { $ref: '#/components/responses/Success' }
         '400': { $ref: '#/components/responses/Validation' }
@@ -173,7 +185,7 @@ paths:
         required: true
         schema: { type: string }
     delete:
-      summary: 写真metadata削除
+      summary: 写真metadataとprivate objectを再試行可能な二段階処理で削除
       responses:
         '200': { $ref: '#/components/responses/Success' }
         '403': { $ref: '#/components/responses/Forbidden' }

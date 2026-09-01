@@ -1,6 +1,6 @@
 import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-22';
-import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } from './data-access.js?v=20260902-24';
-import { createApplicationStore } from './application-store.js?v=20260901-22';
+import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } from './data-access.js?v=20260902-25';
+import { createApplicationStore } from './application-store.js?v=20260902-25';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
 import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-22';
@@ -345,7 +345,7 @@ function answerHtml(c) {
 
 function photoGroupHtml(c, key, label) {
   const photos = dataAccess.photos.list(c.id, key);
-  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${photo.source}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || 'metadata')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${esc(photo.source)}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || 'metadata')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
 }
 
 function caseHistoryHtml(c) {

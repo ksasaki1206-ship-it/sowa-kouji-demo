@@ -4,16 +4,31 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { createAuthRuntime } from './auth/auth-runtime.js';
 import { loadConfig } from './config.js';
+import { createPhotoBinaryStore } from './photo-storage/photo-storage-factory.js';
 import { createDataProvider } from './providers/provider-factory.js';
 import { createApiService } from './services/api-service.js';
 
 export async function buildServer(config = loadConfig()) {
   const provider = await createDataProvider(config);
-  const authRuntime = await createAuthRuntime(config, provider);
-  const service = createApiService(provider);
-  const server = createServer(createApp({ service, authProvider:authRuntime.authProvider, authService:authRuntime.authService, allowedOrigins:config.allowedOrigins }));
-  server.on('close', () => Promise.all([provider.close(), authRuntime.close()]).catch(error => console.error('runtime close failed', error)));
-  return server;
+  let authRuntime = null;
+  let photoBinaryStore = null;
+  try {
+    authRuntime = await createAuthRuntime(config, provider);
+    photoBinaryStore = createPhotoBinaryStore(config);
+    const service = createApiService(provider, { photoBinaryStore, photoMaxBytes:config.photoMaxBytes, photoReadUrlTtlMs:config.photoReadUrlTtlMs });
+    const server = createServer(createApp({
+      service,
+      authProvider:authRuntime.authProvider,
+      authService:authRuntime.authService,
+      allowedOrigins:config.allowedOrigins,
+      photoUploadBodyLimitBytes:config.photoUploadBodyLimitBytes
+    }));
+    server.on('close', () => Promise.all([provider.close(), authRuntime.close(), photoBinaryStore.close()]).catch(error => console.error('runtime close failed', error)));
+    return server;
+  } catch (error) {
+    await Promise.allSettled([provider.close(), authRuntime?.close?.(), photoBinaryStore?.close?.()]);
+    throw error;
+  }
 }
 
 export async function startServer(config = loadConfig()) {

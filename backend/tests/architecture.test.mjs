@@ -4,6 +4,7 @@ import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STORE_CONTRACTS } from '../src/providers/contracts.js';
 import { createMemoryProvider } from '../src/providers/memory-provider.js';
+import { createMemoryPhotoBinaryStore, PHOTO_BINARY_STORE_METHODS } from '../src/photo-storage/photo-binary-store.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const walk = async directory => (await Promise.all((await readdir(directory, { withFileTypes:true })).map(entry => entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)]))).flat();
@@ -26,6 +27,7 @@ files.forEach(file => visit(file));
 
 const serviceSource = [...sources].find(([file]) => file.endsWith(join('services','api-service.js')))[1];
 assert.doesNotMatch(serviceSource, /memory-provider|Google|Sheets|Drive/, 'service layerを保存先実装へ結合しないでください');
+assert.doesNotMatch(serviceSource, /gcs-photo-binary-store|@google-cloud\/storage/, 'service layerをGCS実装へ直接結合しないでください');
 for (const source of sources.values()) assert.doesNotMatch(source, /BEGIN (RSA |EC )?PRIVATE KEY|client_secret|service_account|AIza[0-9A-Za-z_-]{20,}/i);
 
 const provider = createMemoryProvider();
@@ -33,5 +35,8 @@ for (const [name, methods] of Object.entries(STORE_CONTRACTS)) {
   const key = ({ CaseStore:'cases', PropertyStore:'properties', RoomStore:'rooms', StaffStore:'staff', ResponseStore:'responses', AuditStore:'audit', PhotoStore:'photos' })[name];
   for (const method of methods) assert.equal(typeof provider[key][method], 'function');
 }
+
+const photoBinaryStore = createMemoryPhotoBinaryStore();
+for (const method of PHOTO_BINARY_STORE_METHODS) assert.equal(typeof photoBinaryStore[method], 'function');
 
 console.log('backend architecture tests: ok');

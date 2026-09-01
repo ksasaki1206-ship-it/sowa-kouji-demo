@@ -35,6 +35,9 @@ for (const file of ['data-access.js', 'repositories.js', 'storage.js']) {
 assert.doesNotMatch(sources.get('app.js'), /\bfetch\s*\(/, 'app.jsから直接HTTP通信しないでください');
 assert.doesNotMatch(sources.get('http-data-provider.js'), /storage|localStorage|local-data-provider/, 'HTTP providerへlocal保存を混在させないでください');
 assert.doesNotMatch(sources.get('local-data-provider.js'), /fetch|api-client|http-data-provider/, 'local providerへHTTP通信を混在させないでください');
+assert.match(sources.get('app.js'), /Array\.from\(fileList \|\| \[\]\)\.slice\(0, 6\)/, '一度に追加できる写真は6枚までを維持してください');
+assert.match(sources.get('repositories.js'), /photos\[photo\.group\]\.length >= 8/, '分類ごとの写真上限8枚を維持してください');
+assert.match(sources.get('application-store.js'), /source:photo\.source/, 'HTTP modeは圧縮済み写真sourceをBackendへ渡してください');
 
 assert.equal(relative(root, jsRoot).startsWith('..'), false);
 console.log('module-boundary tests: ok');

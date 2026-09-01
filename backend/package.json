@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -14,7 +14,13 @@
     "test:postgres": "node --test tests/postgres-provider.test.mjs"
   },
   "dependencies": {
+    "@google-cloud/storage": "^8.0.1",
     "firebase-admin": "^14.3.0",
     "pg": "^8.16.3"
+  },
+  "overrides": {
+    "firebase-admin": {
+      "@google-cloud/storage": "$@google-cloud/storage"
+    }
   }
 }

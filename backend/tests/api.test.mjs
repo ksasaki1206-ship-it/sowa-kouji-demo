@@ -8,6 +8,7 @@ import { createApiService } from '../src/services/api-service.js';
 
 let server;
 let baseUrl;
+const JPEG_SOURCE = 'data:image/jpeg;base64,/9j/2Q==';
 
 before(async () => {
   const provider = createMemoryProvider();
@@ -113,18 +114,21 @@ test('master CRUD boundary and photo metadata contract', async () => {
   assert.equal(updatedProperty.response.status, 200);
   assert.equal(updatedProperty.payload.data.active, false);
 
-  const createdPhoto = await request('/api/v1/cases/case-001/photos', { method:'POST', user:'worker-a', body:{ group:'after', name:'completion.jpg', mimeType:'image/jpeg', size:1234 } });
+  const createdPhoto = await request('/api/v1/cases/case-001/photos', { method:'POST', user:'worker-a', body:{ group:'after', source:JPEG_SOURCE, name:'completion.jpg', mimeType:'image/jpeg', size:1234 } });
   assert.equal(createdPhoto.response.status, 201);
-  assert.equal(createdPhoto.payload.data.storageProvider, 'mock');
+  assert.equal(createdPhoto.payload.data.storageProvider, 'memory');
+  assert.equal(createdPhoto.payload.data.size, 4);
+  assert.equal(Object.hasOwn(createdPhoto.payload.data, 'source'), false);
   assert.equal(Object.hasOwn(createdPhoto.payload.data, 'data'), false);
   const photos = await request('/api/v1/cases/case-001/photos', { user:'worker-a' });
   assert.equal(photos.payload.meta.count, 1);
+  assert.equal(photos.payload.data[0].source, JPEG_SOURCE);
   const removed = await request(`/api/v1/cases/case-001/photos/${createdPhoto.payload.data.id}`, { method:'DELETE', user:'worker-a' });
   assert.deepEqual(removed.payload.data, { id:createdPhoto.payload.data.id, deleted:true });
 
   const audit = await request('/api/v1/audit', { user:'office' });
   assert.equal(audit.response.status, 200);
-  assert.equal(audit.payload.data.some(item => item.detail.includes('写真メタデータ')), true);
+  assert.equal(audit.payload.data.some(item => item.detail.includes('写真を追加')), true);
   const auditPost = await request('/api/v1/audit', { method:'POST', user:'nishiyama', body:{ detail:'任意作成' } });
   assert.equal(auditPost.response.status, 404);
 });
@@ -163,4 +167,17 @@ test('CORS allows configured origin and rejects other origins', async () => {
   assert.equal(rejected.response.status, 403);
   assert.equal(rejected.payload.error.code, 'FORBIDDEN');
   assert.equal(rejected.response.headers.get('access-control-allow-origin'), null);
+});
+
+test('写真upload endpointだけ通常JSONより大きいbodyを受け付ける', async () => {
+  const largeText = 'A'.repeat(1025 * 1024);
+  const normal = await request('/api/v1/cases', { method:'POST', user:'office', body:{ note:largeText } });
+  assert.equal(normal.response.status, 400);
+  assert.match(normal.payload.error.message, /リクエストサイズ/);
+  const photo = await request('/api/v1/cases/case-001/photos', {
+    method:'POST', user:'nishiyama', body:{ group:'survey', mimeType:'image/jpeg', source:`data:image/jpeg;base64,${largeText}` }
+  });
+  assert.equal(photo.response.status, 400);
+  assert.match(photo.payload.error.message, /JPEG形式/);
+  assert.doesNotMatch(photo.payload.error.message, /リクエストサイズ/);
 });
