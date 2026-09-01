@@ -15,7 +15,7 @@ const dateKey = (offset = 0) => {
 const caseData = (data) => ({
   id: '', property: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
   surveyStaff: '未定', surveyAt: '', workStaff: '未定', workAt: '', materialOrderedAt: '', materialDeliveryAt: '', materialReceivedAt: '',
-  supplier: '', materialNote: '', estimateAmount: 0, note: '', nextActionOverride: '', residentResponseId: '', workflowHistory: [], photos: { survey: [], before: [], during: [], after: [] },
+  supplier: '', materialNote: '', estimateAmount: 0, note: '', nextActionOverride: '', residentResponseId: '', workflowHistory: [], photos: { survey: [], before: [], during: [], after: [] }, photoMetadata: { survey: [], before: [], during: [], after: [] },
   ...data
 });
 
@@ -38,6 +38,20 @@ export function createInitialState() {
 
 const normalizePhotos = (photos = {}) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(key => [key, Array.isArray(photos[key]) ? photos[key] : []]));
 const normalizeWorkflowHistory = history => Array.isArray(history) ? history.filter(item => item && typeof item.step === 'string').map(item => ({ step:item.step, completedAt:item.completedAt || '', completedBy:item.completedBy || '' })) : [];
+const dataUrlMime = source => /^data:([^;,]+)/.exec(source || '')?.[1] || 'image/jpeg';
+const dataUrlSize = source => Math.max(0, Math.floor(((source || '').split(',')[1]?.length || 0) * .75));
+const normalizePhotoMetadata = (metadata = {}, photos, caseId) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(group => [group, photos[group].map((source, index) => {
+  const saved = Array.isArray(metadata[group]) ? metadata[group][index] : null;
+  return {
+    id:saved?.id || `${caseId}-${group}-${index}`,
+    name:saved?.name || `legacy-${group}-${index + 1}.jpg`,
+    mimeType:saved?.mimeType || dataUrlMime(source),
+    size:Number(saved?.size || dataUrlSize(source)),
+    createdAt:saved?.createdAt || '',
+    storageProvider:saved?.storageProvider || 'localStorage',
+    storageKey:saved?.storageKey || ''
+  };
+})]));
 
 export function migrateState(raw) {
   const fallback = createInitialState();
@@ -51,9 +65,11 @@ export function migrateState(raw) {
   })) : [];
   state.cases = Array.isArray(state.cases) ? state.cases.map((c, index) => {
     const demo = fallback.cases.find(item => item.property === c.property && item.room === c.room);
+    const id = c.id || `c-legacy-${index}`;
+    const photos = normalizePhotos(c.photos);
     return caseData({
-    ...c, id: c.id || `c-legacy-${index}`, residentName: c.residentName || demo?.residentName || '', materialOrderedAt:c.materialOrderedAt || '', materialDeliveryAt: c.materialDeliveryAt || '', materialReceivedAt:c.materialReceivedAt || '', supplier:c.supplier || '', materialNote:c.materialNote || '',
-    estimateAmount: Number(c.estimateAmount || 0), nextActionOverride: c.nextActionOverride || '', residentResponseId: c.residentResponseId || '', workflowHistory:normalizeWorkflowHistory(c.workflowHistory), photos: normalizePhotos(c.photos)
+    ...c, id, residentName: c.residentName || demo?.residentName || '', materialOrderedAt:c.materialOrderedAt || '', materialDeliveryAt: c.materialDeliveryAt || '', materialReceivedAt:c.materialReceivedAt || '', supplier:c.supplier || '', materialNote:c.materialNote || '',
+    estimateAmount: Number(c.estimateAmount || 0), nextActionOverride: c.nextActionOverride || '', residentResponseId: c.residentResponseId || '', workflowHistory:normalizeWorkflowHistory(c.workflowHistory), photos, photoMetadata:normalizePhotoMetadata(c.photoMetadata, photos, id)
   }); }) : fallback.cases;
   const usedIds = new Set(state.cases.map(c => c.id));
   fallback.cases.forEach(demo => {

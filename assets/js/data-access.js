@@ -1,0 +1,39 @@
+import { loadState, saveState, resetState } from './storage.js';
+import { repositories } from './repositories.js';
+
+const bindRepository = (repository, getState) => Object.freeze(Object.fromEntries(
+  Object.keys(repository).map(method => [method, (...args) => repository[method](getState(), ...args)])
+));
+
+export function createLocalDataAccess() {
+  let state = null;
+  const snapshot = Object.freeze({
+    load() {
+      state = loadState();
+      return state;
+    },
+    current() {
+      return state || this.load();
+    },
+    save() {
+      return saveState(this.current());
+    },
+    reset() {
+      state = resetState();
+      return state;
+    }
+  });
+  const current = () => snapshot.current();
+  return Object.freeze({
+    adapter:'localStorage',
+    snapshot,
+    cases:bindRepository(repositories.cases, current),
+    responses:bindRepository(repositories.responses, current),
+    auditLogs:bindRepository(repositories.auditLogs, current),
+    workflows:bindRepository(repositories.workflows, current),
+    users:bindRepository(repositories.users, current),
+    photos:bindRepository(repositories.photos, current)
+  });
+}
+
+export const dataAccess = createLocalDataAccess();

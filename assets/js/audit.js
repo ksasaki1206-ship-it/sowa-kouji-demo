@@ -1,3 +1,5 @@
+import { auditRepository } from './repositories.js';
+
 const LABELS = {
   property:'物件名', room:'部屋番号', address:'住所', owner:'管理会社 / オーナー', status:'ステータス',
   surveyStaff:'現調担当', surveyAt:'現調日', estimateAmount:'見積金額', materialOrderedAt:'材料発注日', materialDeliveryAt:'材料納品予定日', materialReceivedAt:'材料納品確認日', supplier:'仕入先', materialNote:'材料メモ',
@@ -11,8 +13,7 @@ const display = (key, value) => {
 };
 
 export function addAudit(state, target, detail, user = state.currentUser) {
-  state.auditLogs.unshift({ id:`a${Date.now()}-${Math.random().toString(16).slice(2)}`, at:new Date().toISOString(), user, property:target?.property || '', room:target?.room || '', caseId:target?.id || '', detail });
-  state.auditLogs = state.auditLogs.slice(0, 500);
+  return auditRepository.create(state, { id:`a${Date.now()}-${Math.random().toString(16).slice(2)}`, at:new Date().toISOString(), user, property:target?.property || '', room:target?.room || '', caseId:target?.id || '', detail });
 }
 
 export function auditChanges(state, before, after) {

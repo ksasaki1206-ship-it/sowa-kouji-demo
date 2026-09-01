@@ -1,4 +1,5 @@
 import { STATUSES } from './data.js';
+import { auditRepository, caseRepository, responseRepository, workflowRepository } from './repositories.js';
 
 const indexOfStatus = status => Math.max(0, STATUSES.indexOf(status));
 const dateOnly = value => value ? value.slice(0, 10) : '';
@@ -19,10 +20,7 @@ const STATUS_STEP = Object.freeze({ 問い合わせ:'inquiry', 現調済:'survey
 export function recordWorkflowStep(item, status, user, completedAt = new Date().toISOString()) {
   const step = STATUS_STEP[status];
   if (!step) return false;
-  item.workflowHistory = Array.isArray(item.workflowHistory) ? item.workflowHistory : [];
-  if (item.workflowHistory.some(entry => entry.step === step)) return false;
-  item.workflowHistory.push({ step, completedAt, completedBy:user || '' });
-  return true;
+  return Boolean(workflowRepository.create(null, item, { step, completedAt, completedBy:user || '' }));
 }
 
 export function workerOwnsCase(item, userName) {
@@ -30,7 +28,7 @@ export function workerOwnsCase(item, userName) {
 }
 
 export function responseForCase(state, item) {
-  return state.responses.find(response => response.id === item.residentResponseId) || state.responses.find(response => response.caseId === item.id);
+  return responseRepository.getForCase(state, item);
 }
 
 export function getNextAction(state, item) {
@@ -54,7 +52,7 @@ export function getNextAction(state, item) {
 }
 
 function lastCaseActivity(state, item) {
-  return state.auditLogs.find(log => log.caseId === item.id)?.at || '';
+  return auditRepository.list(state).find(log => log.caseId === item.id)?.at || '';
 }
 
 export function getCaseAlerts(state, item) {
@@ -79,7 +77,7 @@ export function getCaseAlerts(state, item) {
 }
 
 export function getAllAlerts(state) {
-  return state.cases.flatMap(item => getCaseAlerts(state, item).map(alert => ({ ...alert, item })))
+  return caseRepository.list(state).flatMap(item => getCaseAlerts(state, item).map(alert => ({ ...alert, item })))
     .sort((a, b) => (a.priority === b.priority ? 0 : a.priority === 'high' ? -1 : 1));
 }
 
@@ -104,23 +102,23 @@ export function matchesCasePreset(state, item, preset) {
 export function getDashboardMetrics(state) {
   const alerts = getAllAlerts(state);
   return {
-    open:state.cases.filter(item => item.status !== '完了').length,
-    todaySurvey:state.cases.filter(item => dateOnly(item.surveyAt) === todayKey()).length,
-    todayWork:state.cases.filter(item => dateOnly(item.workAt) === todayKey()).length,
-    responseWait:state.cases.filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'response-wait')).length,
+    open:caseRepository.list(state).filter(item => item.status !== '完了').length,
+    todaySurvey:caseRepository.list(state).filter(item => dateOnly(item.surveyAt) === todayKey()).length,
+    todayWork:caseRepository.list(state).filter(item => dateOnly(item.workAt) === todayKey()).length,
+    responseWait:caseRepository.list(state).filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'response-wait')).length,
     alerts:new Set(alerts.map(alert => alert.caseId)).size,
-    weekWork:state.cases.filter(item => isThisWeek(item.workAt)).length,
-    complete:state.cases.filter(item => item.status === '完了').length,
-    materialUnordered:state.cases.filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'material-unordered')).length,
-    materialOverdue:state.cases.filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'material-overdue')).length,
-    photoMissing:state.cases.filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'after-photo-missing')).length
+    weekWork:caseRepository.list(state).filter(item => isThisWeek(item.workAt)).length,
+    complete:caseRepository.list(state).filter(item => item.status === '完了').length,
+    materialUnordered:caseRepository.list(state).filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'material-unordered')).length,
+    materialOverdue:caseRepository.list(state).filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'material-overdue')).length,
+    photoMissing:caseRepository.list(state).filter(item => getCaseAlerts(state, item).some(alert => alert.code === 'after-photo-missing')).length
   };
 }
 
 export function getStaffEvents(state, scope = 'week') {
   const today = todayKey();
   const include = value => scope === 'today' ? dateOnly(value) === today : isThisWeek(value);
-  return state.cases.flatMap(item => [
+  return caseRepository.list(state).flatMap(item => [
     include(item.surveyAt) && item.surveyStaff !== '未定' ? { type:'survey', label:'現調', staff:item.surveyStaff, at:item.surveyAt, item } : null,
     include(item.workAt) && item.workStaff !== '未定' ? { type:'work', label:'工事', staff:item.workStaff, at:item.workAt, item } : null
   ].filter(Boolean)).sort((a, b) => a.at.localeCompare(b.at));

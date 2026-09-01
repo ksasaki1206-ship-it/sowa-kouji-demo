@@ -7,7 +7,10 @@
 - `index.html`: 画面の構造と読み込み口
 - `assets/css/styles.css`: レイアウト、部品、スマートフォン表示
 - `assets/js/data.js`: 初期データ、選択肢、旧データのマイグレーション
-- `assets/js/storage.js`: localStorageの読み書き
+- `assets/js/storage-driver.js`: localStorage固有APIの隔離
+- `assets/js/storage.js`: 既存保存キーと状態スナップショットの読み書き
+- `assets/js/repositories.js`: 案件・回答・履歴・工程・ユーザー・写真のデータ操作
+- `assets/js/data-access.js`: 画面から利用するデータアクセス窓口
 - `assets/js/audit.js`: 操作履歴と案件編集時の差分記録
 - `assets/js/auth.js`: ロール付きユーザー定義、権限定義、ログイン状態、パスワードのハッシュ化・変更・リセット
 - `assets/js/workflow.js`: 次アクション、要対応判定、管理指標、担当者別予定の業務ルール
@@ -40,3 +43,36 @@
 - 材料管理：材料発注日、納品予定日、納品確認日、仕入先、材料メモと、未発注・納品遅延・納品未確認アラート
 
 追加項目は既存案件の読み込み時に空値で補完します。`workflowHistory` は既存の操作履歴とは分離し、新たに完了した工程のみを重複なしで記録します。
+
+## データアクセス層
+
+現在のデータフローは次のとおりです。
+
+`画面 / 業務ルール → data-access.js → repositories.js → storage.js → storage-driver.js → localStorage`
+
+保存キー `sowa-demo-photo-v1`、`sowa-demo-auth-v1`、`sowa-demo-credentials-v1` は変更していません。旧形式の案件は読み込み時に `photoMetadata` を追加し、従来の `photos` 内のData URLもそのまま保持します。
+
+各リポジトリの責務は以下です。
+
+| データ | list / get | create | update |
+| --- | --- | --- | --- |
+| 案件 | 全件・ID・物件/部屋で取得 | 新規案件を追加 | 案件フィールドを更新 |
+| 入居者回答 | 全件・ID・案件に紐づく回答を取得 | 回答を追加 | 反映状態などを更新 |
+| 操作履歴 | 新しい順の履歴・IDで取得 | 履歴を先頭へ追加し最大500件に制限 | 履歴項目を更新 |
+| 工程履歴 | 案件内の工程・工程キーで取得 | 未登録工程を追加 | 完了日時・実施者を更新 |
+| ユーザー情報 | `auth.js` のユーザー定義を一覧・ID/名前で取得 | 現デモではコード定義のため無効 | 現デモではコード定義のため無効 |
+| 写真メタデータ | 案件・分類・写真IDで取得 | Data URLとメタデータを同時追加 | 保存先ID等のメタデータを更新 |
+
+写真メタデータには、写真ID、ファイル名、MIMEタイプ、サイズ、登録日時、保存方式、将来の保存先キーを保持します。写真削除は従来機能維持のため `remove` としてData URLとメタデータを同時に削除します。
+
+自動確認は `tests/data-access.test.mjs` で、旧形式マイグレーションと各リポジトリ、既存キーへの保存を検証できます。サイトの実行にNode.jsやビルド工程は不要です。
+
+## Google Sheets / Google Drive連携の想定
+
+将来は `data-access.js` と同じ操作契約を持つリモート実装へ差し替え、次のデータフローにします。
+
+`GitHub Pages → Googleログイン等 → HTTPSバックエンドAPI → Google Sheets（案件・回答・履歴・ユーザー参照） / Google Drive（写真本体）`
+
+推奨候補は、Cloud RunまたはCloud Functions上のAPI、Google Identity PlatformまたはFirebase Authentication、Google Sheets API、Google Drive APIの構成です。Cloud Runではダウンロードしたサービスアカウント鍵を置かず、専用のサービスIDへ最小権限を付与します。その他の秘密情報が必要な場合だけSecret Managerを利用します。バックエンドで利用者の認証・role・案件単位の権限を検証し、Sheets更新の競合制御とDriveファイルIDの管理も行います。Driveは共有ドライブまたは組織管理の保存先を使い、サービスアカウント削除時の所有ファイル消失を避ける設計が必要です。小規模な検証にはApps Script Webアプリも候補ですが、認証、CORS、同時更新、監査、運用監視の制約があるため、本番運用ではCloud Run等のAPIを優先します。
+
+GitHub PagesへGoogle APIキー、OAuthクライアントシークレット、サービスアカウントJSON、Drive/Sheetsを直接更新できる資格情報は配置しません。フロントエンドが保持するのは、正式認証導入後の短時間アクセストークン等、公開クライアントとして扱える情報に限定します。

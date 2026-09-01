@@ -1,3 +1,5 @@
+import { localStorageDriver } from './storage-driver.js';
+
 export const AUTH_KEY = 'sowa-demo-auth-v1';
 export const CREDENTIALS_KEY = 'sowa-demo-credentials-v1';
 const DEFAULT_PASSWORD = 'password';
@@ -35,7 +37,7 @@ async function hashPassword(userId, password) {
 
 function readCredentials() {
   try {
-    const saved = JSON.parse(localStorage.getItem(CREDENTIALS_KEY) || 'null');
+    const saved = localStorageDriver.getJson(CREDENTIALS_KEY, null);
     return saved && typeof saved === 'object' && saved.users && typeof saved.users === 'object'
       ? saved
       : { version:1, users:{} };
@@ -45,7 +47,7 @@ function readCredentials() {
 }
 
 function writeCredentials(credentials) {
-  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
+  localStorageDriver.setJson(CREDENTIALS_KEY, credentials);
 }
 
 async function defaultCredential(user) {
@@ -61,7 +63,7 @@ export async function ensureCredentials() {
       changed = true;
     }
   }
-  if (changed || !localStorage.getItem(CREDENTIALS_KEY)) writeCredentials(credentials);
+  if (changed || !localStorageDriver.has(CREDENTIALS_KEY)) writeCredentials(credentials);
   return credentials;
 }
 
@@ -76,7 +78,7 @@ export async function authenticate(userName, password) {
 
 export function getSession() {
   try {
-    const saved = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
+    const saved = localStorageDriver.getJson(AUTH_KEY, null);
     const user = saved && typeof saved.user === 'string' ? getUserDefinition(saved.user) : null;
     return user ? { ...saved, user:user.name, userId:user.id, role:user.role } : null;
   } catch {
@@ -88,12 +90,12 @@ export function login(user) {
   const definition = getUserDefinition(user);
   if (!definition) throw new Error('未登録のユーザーです。');
   const session = { user:definition.name, userId:definition.id, role:definition.role, loggedInAt:new Date().toISOString() };
-  localStorage.setItem(AUTH_KEY, JSON.stringify(session));
+  localStorageDriver.setJson(AUTH_KEY, session);
   return session;
 }
 
 export function logout() {
-  localStorage.removeItem(AUTH_KEY);
+  localStorageDriver.remove(AUTH_KEY);
 }
 
 export async function changeOwnPassword(userName, currentPassword, newPassword) {

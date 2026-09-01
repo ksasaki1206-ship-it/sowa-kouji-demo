@@ -1,10 +1,10 @@
 import { STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
-import { loadState, saveState, resetState } from './storage.js';
+import { dataAccess } from './data-access.js';
 import { addAudit, auditChanges } from './audit.js';
-import { USER_DEFINITIONS, USERS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
+import { USERS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
 import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, responseForCase as workflowResponseForCase } from './workflow.js';
 
-let state = loadState();
+let state = dataAccess.snapshot.load();
 let currentCaseId = null;
 let noticeTimer = 0;
 let sessionUser = '';
@@ -17,12 +17,12 @@ const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/'
 const fmtDate = value => value ? value.replaceAll('-', '/') : '未定';
 const fmtMoney = value => Number(value || 0).toLocaleString('ja-JP') + '円';
 const datePart = value => value ? value.slice(0, 10) : '';
-const properties = () => [...new Set(state.cases.map(c => c.property).filter(Boolean))].sort();
-const caseById = id => state.cases.find(c => c.id === id);
+const properties = () => [...new Set(dataAccess.cases.list().map(c => c.property).filter(Boolean))].sort();
+const caseById = id => dataAccess.cases.get(id);
 const responseForCase = c => workflowResponseForCase(state, c);
 
 function persist(message) {
-  if (!saveState(state)) return notify('保存容量を超えました。写真を減らしてください。');
+  if (!dataAccess.snapshot.save()) return notify('保存容量を超えました。写真を減らしてください。');
   if (message) notify(message);
 }
 
@@ -78,8 +78,9 @@ function wireCaseLinks(root = document) {
 function renderHome() {
   const today = todayKey();
   const metrics = getDashboardMetrics(state);
-  const surveys = state.cases.filter(c => datePart(c.surveyAt) === today);
-  const works = state.cases.filter(c => datePart(c.workAt) === today);
+  const allCases = dataAccess.cases.list();
+  const surveys = allCases.filter(c => datePart(c.surveyAt) === today);
+  const works = allCases.filter(c => datePart(c.workAt) === today);
   $('stOpen').textContent = metrics.open;
   $('stSurvey').textContent = metrics.todaySurvey;
   $('stWork').textContent = metrics.todayWork;
@@ -88,7 +89,7 @@ function renderHome() {
   $('stWeekWork').textContent = metrics.weekWork;
   $('stComplete').textContent = metrics.complete;
   const todayCases = [...new Map([...surveys, ...works].map(c => [c.id, c])).values()];
-  const list = todayCases.length ? todayCases : state.cases.slice(0, 5);
+  const list = todayCases.length ? todayCases : allCases.slice(0, 5);
   $('todayBlocks').innerHTML = `<div class="card"><div class="title">${todayCases.length ? '今日の予定' : '要対応案件'}</div>${list.map(c => `<button class="row open-case" data-id="${esc(c.id)}"><span><span class="rowMain">${esc(c.property)} ${esc(c.room)}</span><span class="muted">${datePart(c.surveyAt) === today ? `現調 ${esc(c.surveyAt.slice(11))}` : ''}${datePart(c.surveyAt) === today && datePart(c.workAt) === today ? ' ／ ' : ''}${datePart(c.workAt) === today ? `工事 ${esc(c.workAt.slice(11))}` : ''}${todayCases.length ? '' : `${esc(c.status)} ／ 次：${esc(nextAction(c))}`}</span></span><b>›</b></button>`).join('')}</div>`;
   wireCaseLinks($('todayBlocks'));
   const alerts = getAllAlerts(state).slice(0, 6);
@@ -123,7 +124,7 @@ function renderCases() {
   const query = $('search').value.trim().toLowerCase();
   const selected = filter.value;
   const preset = $('casePreset').value;
-  const cases = state.cases.filter(c => (sessionRole !== 'worker' || workerOwnsCase(c, sessionUser)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
+  const cases = dataAccess.cases.list().filter(c => (sessionRole !== 'worker' || workerOwnsCase(c, sessionUser)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
   const presetLabel = $('casePreset').selectedOptions[0]?.textContent || '';
   $('activeCaseFilter').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
   $('activeCaseFilter').classList.toggle('hidden', preset === 'all');
@@ -138,17 +139,17 @@ function answerHtml(c) {
 }
 
 function photoGroupHtml(c, key, label) {
-  const photos = c.photos[key] || [];
-  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((src, index) => `<div class="thumb"><img src="${src}" alt="${esc(label)} ${index + 1}"><button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+  const photos = dataAccess.photos.list(c.id, key);
+  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb"><img src="${photo.source}" alt="${esc(photo.name || `${label} ${index + 1}`)}"><button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
 }
 
 function caseHistoryHtml(c) {
-  const logs = state.auditLogs.filter(log => log.caseId === c.id || (log.property === c.property && log.room === c.room)).slice(0, 5);
+  const logs = dataAccess.auditLogs.list().filter(log => log.caseId === c.id || (log.property === c.property && log.room === c.room)).slice(0, 5);
   return logs.length ? logs.map(log => `<div class="case-history-item"><b>${esc(log.user)}</b>・${esc(new Date(log.at).toLocaleString('ja-JP'))}<br>${esc(log.detail)}</div>`).join('') : '<div class="muted">まだ変更履歴はありません。</div>';
 }
 
 function workflowTimelineHtml(c) {
-  const history = Array.isArray(c.workflowHistory) ? c.workflowHistory : [];
+  const history = dataAccess.workflows.list(c);
   return `<div class="workflow-timeline">${WORKFLOW_STEPS.map(step => {
     const completed = history.find(entry => entry.step === step.key);
     return `<div class="timeline-step ${completed ? 'completed' : ''}"><span class="timeline-dot"></span><div><b>${esc(step.label)}</b><span>${completed?.completedAt ? esc(new Date(completed.completedAt).toLocaleString('ja-JP')) : '未完了'}</span>${completed?.completedBy ? `<small>${esc(completed.completedBy)}</small>` : ''}</div></div>`;
@@ -208,7 +209,7 @@ function requestPhotoCheckedAction(c, targetStatus, action) {
 
 function advanceCase(c, targetStatus) {
   const old = c.status;
-  c.status = targetStatus;
+  dataAccess.cases.update(c.id, { status:targetStatus });
   recordWorkflowStep(c, targetStatus, sessionUser);
   addAudit(state, c, `ステータスを ${old} → ${c.status} に変更`);
   persist(`「${c.status}」へ進めました。`);
@@ -274,21 +275,22 @@ async function handleFiles(c, key, fileList) {
   const files = Array.from(fileList || []).slice(0, 6);
   if (!files.length) return;
   try {
-    const images = await Promise.all(files.map(compressImage));
-    c.photos[key] = [...(c.photos[key] || []), ...images].slice(0, 8);
-    addAudit(state, c, `${PHOTO_GROUPS[key]}を${images.length}枚追加`);
+    const images = await Promise.all(files.map(async file => ({ file, source:await compressImage(file) })));
+    const added = images.map(({ file, source }) => dataAccess.photos.create(c.id, { group:key, source, name:file.name || 'photo.jpg', mimeType:'image/jpeg', size:file.size })).filter(Boolean);
+    if (!added.length) return notify('この分類には8枚まで保存できます。');
+    addAudit(state, c, `${PHOTO_GROUPS[key]}を${added.length}枚追加`);
     if (key === 'after' && STATUSES.indexOf(c.status) >= STATUSES.indexOf('施工済') && STATUSES.indexOf(c.status) < STATUSES.indexOf('写真登録')) {
       c.status = '写真登録';
       recordWorkflowStep(c, '写真登録', sessionUser);
     }
-    persist(`${images.length}枚の写真を追加しました。`);
+    persist(`${added.length}枚の写真を追加しました。`);
     openDetail(c.id);
   } catch { notify('写真の読み込みに失敗しました。'); }
 }
 
 function deletePhoto(c, key, index) {
   if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && workerOwnsCase(c, sessionUser)))) return notify('写真を削除する権限がありません。');
-  c.photos[key].splice(index, 1);
+  if (!dataAccess.photos.remove(c.id, key, index)) return notify('写真が見つかりません。');
   addAudit(state, c, `${PHOTO_GROUPS[key]}を1枚削除`);
   persist('写真を削除しました。');
   openDetail(c.id);
@@ -324,9 +326,12 @@ function saveCaseForm(event) {
     Object.assign(c, values);
     if (!existing) {
       recordWorkflowStep(c, '問い合わせ', sessionUser);
-      state.cases.push(c);
+      dataAccess.cases.create(c);
       addAudit(state, c, '案件を新規登録');
-    } else auditChanges(state, before, c);
+    } else {
+      dataAccess.cases.update(c.id, values);
+      auditChanges(state, before, c);
+    }
     recordWorkflowStep(c, c.status, sessionUser);
     if (c.materialOrderedAt) recordWorkflowStep(c, '材料手配中', sessionUser, `${c.materialOrderedAt}T12:00`);
     if (c.materialReceivedAt) recordWorkflowStep(c, '材料納品済', sessionUser, `${c.materialReceivedAt}T12:00`);
@@ -399,7 +404,7 @@ function renderSchedule() {
   populateSelect(select, props, '全物件');
   select.value = previous === 'all' || props.includes(previous) ? previous : 'all';
   const selectedProperties = select.value === 'all' ? props : [select.value];
-  const cases = state.cases.filter(c => selectedProperties.includes(c.property));
+  const cases = dataAccess.cases.list().filter(c => selectedProperties.includes(c.property));
   $('scheduleSummary').innerHTML = [
     ['回答待ち', cases.filter(c => !responseForCase(c) && c.note.includes('回答待ち')).length],
     ['現調未確定', cases.filter(c => !c.surveyAt).length],
@@ -430,7 +435,8 @@ function setResponseMode(mode) {
 }
 
 function renderResponses() {
-  $('responseList').innerHTML = state.responses.length ? state.responses.slice().sort((a,b) => b.receivedAt.localeCompare(a.receivedAt)).map(r => `<article class="card response-card"><div class="response-meta"><b>${esc(r.property)} ${esc(r.room)}</b><span class="badge ${r.applied ? 'ok' : 'wait'}">${r.applied ? '案件へ反映済' : '未反映'}</span></div><div class="muted">入居者：${esc(r.name)} ／ 受信：${esc(new Date(r.receivedAt).toLocaleString('ja-JP'))}</div><div class="response-grid"><div><div class="lab">第1希望</div><div class="val">${esc(fmtDate(r.d1))} ${esc(r.t1)}</div></div><div><div class="lab">第2希望</div><div class="val">${esc(fmtDate(r.d2))} ${esc(r.t2)}</div></div></div><div class="response-note">備考：${esc(r.note || 'なし')}</div>${r.caseId ? `<button class="btn open-case" data-id="${esc(r.caseId)}">案件詳細を見る</button>` : ''}</article>`).join('') : '<div class="card empty">まだ回答はありません。</div>';
+  const responses = dataAccess.responses.list();
+  $('responseList').innerHTML = responses.length ? responses.slice().sort((a,b) => b.receivedAt.localeCompare(a.receivedAt)).map(r => `<article class="card response-card"><div class="response-meta"><b>${esc(r.property)} ${esc(r.room)}</b><span class="badge ${r.applied ? 'ok' : 'wait'}">${r.applied ? '案件へ反映済' : '未反映'}</span></div><div class="muted">入居者：${esc(r.name)} ／ 受信：${esc(new Date(r.receivedAt).toLocaleString('ja-JP'))}</div><div class="response-grid"><div><div class="lab">第1希望</div><div class="val">${esc(fmtDate(r.d1))} ${esc(r.t1)}</div></div><div><div class="lab">第2希望</div><div class="val">${esc(fmtDate(r.d2))} ${esc(r.t2)}</div></div></div><div class="response-note">備考：${esc(r.note || 'なし')}</div>${r.caseId ? `<button class="btn open-case" data-id="${esc(r.caseId)}">案件詳細を見る</button>` : ''}</article>`).join('') : '<div class="card empty">まだ回答はありません。</div>';
   wireCaseLinks($('responseList'));
 }
 
@@ -439,7 +445,7 @@ function saveResidentResponse(event) {
   const form = event.currentTarget;
   const data = new FormData(form);
   const response = { id:`r${Date.now()}`, property:data.get('property'), room:data.get('room'), name:data.get('name'), phone:data.get('phone'), d1:data.get('d1'), t1:data.get('t1'), d2:data.get('d2'), t2:data.get('t2'), note:data.get('note'), receivedAt:new Date().toISOString(), applied:false, caseId:'' };
-  const c = state.cases.find(item => item.property === response.property && item.room === response.room);
+  const c = dataAccess.cases.getByPropertyRoom(response.property, response.room);
   if (c) {
     response.applied = true;
     response.caseId = c.id;
@@ -450,7 +456,7 @@ function saveResidentResponse(event) {
   } else {
     addAudit(state, { property:response.property, room:response.room }, '入居者回答を受信（対象案件なし）', '入居者');
   }
-  state.responses.push(response);
+  dataAccess.responses.create(response);
   persist(c ? '回答を受け付け、案件へ反映しました。' : '回答を受け付けました。対象案件は未登録です。');
   form.reset();
   form.elements.property.value = '○○マンション';
@@ -465,7 +471,7 @@ function renderHistory() {
   const previous = propertyFilter.value;
   populateSelect(propertyFilter, properties(), 'すべての物件');
   if ([...propertyFilter.options].some(option => option.value === previous)) propertyFilter.value = previous;
-  const logs = state.auditLogs.filter(log => (userFilter.value === 'all' || log.user === userFilter.value) && (propertyFilter.value === 'all' || log.property === propertyFilter.value));
+  const logs = dataAccess.auditLogs.list().filter(log => (userFilter.value === 'all' || log.user === userFilter.value) && (propertyFilter.value === 'all' || log.property === propertyFilter.value));
   $('historyList').innerHTML = logs.length ? logs.map(log => `<article class="card history-card"><div class="history-meta"><b>${esc(log.user)}</b><span class="badge">${esc(new Date(log.at).toLocaleString('ja-JP'))}</span></div><div class="muted">${esc(log.property || '物件未指定')} ${esc(log.room || '')}</div><p>${esc(log.detail)}</p>${log.caseId ? `<button class="btn open-case" data-id="${esc(log.caseId)}">案件詳細</button>` : ''}</article>`).join('') : '<div class="card empty">該当する履歴はありません。</div>';
   wireCaseLinks($('historyList'));
 }
@@ -496,7 +502,7 @@ function setScheduleMode(mode) {
 
 function renderStaffSchedule() {
   const staffSelect = $('scheduleStaff');
-  const staff = [...new Set(state.cases.flatMap(c => [c.surveyStaff, c.workStaff]).filter(name => name && name !== '未定'))].sort((a,b) => a.localeCompare(b, 'ja'));
+  const staff = [...new Set(dataAccess.cases.list().flatMap(c => [c.surveyStaff, c.workStaff]).filter(name => name && name !== '未定'))].sort((a,b) => a.localeCompare(b, 'ja'));
   const previous = staffSelect.value || 'all';
   populateSelect(staffSelect, staff, '全担当者');
   staffSelect.value = previous === 'all' || staff.includes(previous) ? previous : 'all';
@@ -542,7 +548,7 @@ function activateSession(session) {
   sessionUser = session.user;
   sessionRole = session.role;
   state.currentUser = session.user;
-  saveState(state);
+  dataAccess.snapshot.save();
   $('loggedInUser').textContent = session.user;
   $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
   updateRoleUi(session.role);
@@ -585,7 +591,7 @@ async function saveOwnPassword(event) {
 }
 
 function renderUserAdmin() {
-  $('userAdminList').innerHTML = USER_DEFINITIONS.map(user => `<div class="user-admin-row"><div><b>${esc(user.name)}</b><span class="muted">${esc(ROLE_DEFINITIONS[user.role]?.label || user.role)}</span></div><button class="btn reset-password" type="button" data-user="${esc(user.name)}">パスワードをリセット</button></div>`).join('');
+  $('userAdminList').innerHTML = dataAccess.users.list().map(user => `<div class="user-admin-row"><div><b>${esc(user.name)}</b><span class="muted">${esc(ROLE_DEFINITIONS[user.role]?.label || user.role)}</span></div><button class="btn reset-password" type="button" data-user="${esc(user.name)}">パスワードをリセット</button></div>`).join('');
   $('userAdminList').querySelectorAll('.reset-password').forEach(button => button.addEventListener('click', async () => {
     const target = button.dataset.user;
     if (!confirm(`${target}のパスワードを初期値へ戻しますか？`)) return;
@@ -663,10 +669,10 @@ async function init() {
   });
   $('resetDemo').addEventListener('click', async () => {
     if (!confirm('デモ内容と写真、変更履歴を初期状態に戻しますか？')) return;
-    state = resetState();
+    state = dataAccess.snapshot.reset();
     await resetAllPasswords();
     state.currentUser = sessionUser;
-    saveState(state);
+    dataAccess.snapshot.save();
     $('search').value = '';
     $('filter').innerHTML = '';
     $('casePreset').value = 'all';
