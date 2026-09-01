@@ -1,4 +1,4 @@
-import { USERS } from './auth.js?v=20260901-18';
+import { USERS } from './auth.js?v=20260901-19';
 
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
@@ -45,6 +45,8 @@ const dateKey = (offset = 0) => {
 
 const caseData = (data) => ({
   id: '', propertyId: '', property: '', roomId: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
+  lifecycleStatus:'active', isArchived:false, archivedAt:'', archivedBy:'', archiveReason:'',
+  cancelledAt:'', cancelledBy:'', cancelReasonCategory:'', cancelReason:'', scheduleHistory:[],
   surveyStaff: '未定', surveyStaffId: '', surveyAt: '', surveyDurationMinutes: DEFAULT_DURATIONS.survey,
   workStaff: '未定', workStaffId: '', workAt: '', workDurationMinutes: DEFAULT_DURATIONS.work,
   materialOrderedAt: '', materialDeliveryAt: '', materialReceivedAt: '',
@@ -77,6 +79,13 @@ export function createInitialState() {
 
 const normalizePhotos = (photos = {}) => Object.fromEntries(Object.keys(PHOTO_GROUPS).map(key => [key, Array.isArray(photos[key]) ? photos[key] : []]));
 const normalizeWorkflowHistory = history => Array.isArray(history) ? history.filter(item => item && typeof item.step === 'string').map(item => ({ step:item.step, completedAt:item.completedAt || '', completedBy:item.completedBy || '' })) : [];
+const normalizeScheduleHistory = history => Array.isArray(history) ? history.filter(item => item && ['survey','work'].includes(item.type) && ['scheduled','rescheduled','postponed','cancelled'].includes(item.action)).map((item, index) => ({
+  id:String(item.id || `schedule-legacy-${index}`), type:item.type, action:item.action,
+  oldAt:String(item.oldAt || ''), newAt:String(item.newAt || ''),
+  oldDurationMinutes:Number(item.oldDurationMinutes || 0), newDurationMinutes:Number(item.newDurationMinutes || 0),
+  reasonCategory:String(item.reasonCategory || ''), reason:String(item.reason || ''),
+  changedAt:String(item.changedAt || ''), changedBy:String(item.changedBy || '')
+})) : [];
 const normalizeDuration = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.round(Number(value)) : fallback;
 const legacyStaffId = name => `staff-legacy-${Array.from(name || 'staff').reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) >>> 0, 7).toString(36)}`;
 const inferStaffType = name => name.endsWith('班') ? 'team' : 'contractor';
@@ -222,6 +231,8 @@ export function migrateState(raw) {
     const photos = normalizePhotos(c.photos);
     return caseData({
     ...c, id, residentName: c.residentName || demo?.residentName || '', materialOrderedAt:c.materialOrderedAt || '', materialDeliveryAt: c.materialDeliveryAt || '', materialReceivedAt:c.materialReceivedAt || '', supplier:c.supplier || '', materialNote:c.materialNote || '',
+    lifecycleStatus:c.lifecycleStatus === 'cancelled' ? 'cancelled' : 'active', isArchived:c.isArchived === true, archivedAt:c.archivedAt || '', archivedBy:c.archivedBy || '', archiveReason:c.archiveReason || '',
+    cancelledAt:c.cancelledAt || '', cancelledBy:c.cancelledBy || '', cancelReasonCategory:c.cancelReasonCategory || '', cancelReason:c.cancelReason || '', scheduleHistory:normalizeScheduleHistory(c.scheduleHistory),
     estimateAmount: Number(c.estimateAmount || 0), nextActionOverride: c.nextActionOverride || '', residentResponseId: c.residentResponseId || '', workflowHistory:normalizeWorkflowHistory(c.workflowHistory), photos, photoMetadata:normalizePhotoMetadata(c.photoMetadata, photos, id),
     surveyStaffId:c.surveyStaffId || '', workStaffId:c.workStaffId || '', surveyDurationMinutes:normalizeDuration(c.surveyDurationMinutes, DEFAULT_DURATIONS.survey), workDurationMinutes:normalizeDuration(c.workDurationMinutes, DEFAULT_DURATIONS.work)
   }); }) : fallback.cases;

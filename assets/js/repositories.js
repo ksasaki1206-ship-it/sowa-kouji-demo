@@ -1,5 +1,6 @@
-import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-18';
-import { USER_DEFINITIONS } from './auth.js?v=20260901-18';
+import { PHOTO_GROUPS, normalizePropertyName, normalizeRoomNumber } from './data.js?v=20260901-19';
+import { USER_DEFINITIONS } from './auth.js?v=20260901-19';
+import { changeSchedule, postponeSchedule, cancelCase, restoreCancelledCase, archiveCase, unarchiveCase } from './lifecycle.js?v=20260901-19';
 
 const array = (state, key) => Array.isArray(state?.[key]) ? state[key] : [];
 const matchId = (item, id) => item?.id === id;
@@ -26,6 +27,34 @@ export const caseRepository = Object.freeze({
     if (!item) return null;
     Object.assign(item, changes);
     return item;
+  }
+});
+
+export const lifecycleRepository = Object.freeze({
+  listSchedule(state, caseId, type = '') {
+    const item = caseRepository.get(state, caseId);
+    const history = Array.isArray(item?.scheduleHistory) ? item.scheduleHistory : [];
+    return type ? history.filter(entry => entry.type === type) : history;
+  },
+  changeSchedule(state, caseId, type, changes) {
+    const item = caseRepository.get(state, caseId);
+    return changeSchedule(item, type, changes);
+  },
+  postponeSchedule(state, caseId, type, details) {
+    const item = caseRepository.get(state, caseId);
+    return postponeSchedule(item, type, details);
+  },
+  cancel(state, caseId, details) {
+    return cancelCase(caseRepository.get(state, caseId), details);
+  },
+  restore(state, caseId) {
+    return restoreCancelledCase(caseRepository.get(state, caseId));
+  },
+  archive(state, caseId, details) {
+    return archiveCase(caseRepository.get(state, caseId), details);
+  },
+  unarchive(state, caseId) {
+    return unarchiveCase(caseRepository.get(state, caseId));
   }
 });
 
@@ -263,6 +292,7 @@ export const photoRepository = Object.freeze({
 
 export const repositories = Object.freeze({
   cases:caseRepository,
+  lifecycle:lifecycleRepository,
   responses:responseRepository,
   auditLogs:auditRepository,
   workflows:workflowRepository,

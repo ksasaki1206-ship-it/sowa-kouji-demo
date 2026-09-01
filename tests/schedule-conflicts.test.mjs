@@ -24,6 +24,8 @@ assert.equal(findScheduleConflicts(state, otherStaff).length, 0);
 
 const sameCaseCrossType = { ...base, id:'new-6', surveyStaff:'高橋さん', surveyStaffId:'staff-takahashi', surveyAt:'2026-09-02T10:00', workStaff:'高橋さん', workStaffId:'staff-takahashi', workAt:'2026-09-02T10:30', workDurationMinutes:60 };
 assert.equal(findScheduleConflicts({ cases:[] }, sameCaseCrossType).length, 1);
+assert.equal(findScheduleConflicts({ cases:[{ ...survey, lifecycleStatus:'cancelled' }] }, surveySurvey).length, 0);
+assert.equal(findScheduleConflicts({ cases:[{ ...survey, isArchived:true }] }, surveySurvey).length, 0);
 
 const linkedStaff = [{ id:'staff-worker-a', name:'職人A', loginUserId:'worker-a' }];
 assert.equal(workerOwnsCase({ ...base, workStaff:'旧表示名', workStaffId:'staff-worker-a' }, '職人A', 'worker-a', linkedStaff), true);

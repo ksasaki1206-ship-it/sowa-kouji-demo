@@ -1,8 +1,9 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-18';
-import { dataAccess } from './data-access.js?v=20260901-18';
-import { addAudit, auditChanges } from './audit.js?v=20260901-18';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-18';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-18';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-19';
+import { dataAccess } from './data-access.js?v=20260901-19';
+import { addAudit, auditChanges } from './audit.js?v=20260901-19';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-19';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-19';
+import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-19';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;
@@ -14,6 +15,9 @@ let scheduleMode = 'property';
 let pendingPhotoAction = null;
 let pendingConflictAction = null;
 let pendingDuplicateAction = null;
+let lifecycleActionContext = null;
+let editingCaseSnapshot = null;
+let caseListMode = 'active';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -30,6 +34,8 @@ const responseForCase = c => workflowResponseForCase(state, c);
 const staffList = () => dataAccess.staff.list();
 const staffById = id => id ? dataAccess.staff.get(id) : null;
 const ownsCase = c => workerOwnsCase(c, sessionUser, sessionUserId, staffList());
+const scheduleReasonLabel = value => SCHEDULE_REASON_CATEGORIES.find(([key]) => key === value)?.[1] || value || '理由未登録';
+const cancelReasonLabel = value => CANCEL_REASON_CATEGORIES.find(([key]) => key === value)?.[1] || value || '理由未登録';
 
 function formatPlan(at, durationMinutes, includeDate = true) {
   if (!at) return '未定';
@@ -99,6 +105,48 @@ function updateEndPreviews() {
   const form = $('caseForm');
   $('surveyEndPreview').textContent = `終了予定：${formatPlan(form.elements.surveyAt.value, form.elements.surveyDurationMinutes.value, false)}`;
   $('workEndPreview').textContent = `終了予定：${formatPlan(form.elements.workAt.value, form.elements.workDurationMinutes.value, false)}`;
+  updateScheduleReasonVisibility();
+}
+
+function updateScheduleReasonVisibility() {
+  const form = $('caseForm');
+  ['survey','work'].forEach(type => {
+    const at = form.elements[`${type}At`].value;
+    const duration = Number(form.elements[`${type}DurationMinutes`].value || 0);
+    const oldAt = editingCaseSnapshot?.[`${type}At`] || '';
+    const oldDuration = Number(editingCaseSnapshot?.[`${type}DurationMinutes`] || 0);
+    const last = [...(editingCaseSnapshot?.scheduleHistory || [])].reverse().find(entry => entry.type === type);
+    const changedExisting = Boolean(oldAt) && (oldAt !== at || oldDuration !== duration);
+    const rescheduling = !oldAt && Boolean(at) && last?.action === 'postponed';
+    $(`${type}ScheduleReason`).classList.toggle('hidden', !(changedExisting || rescheduling));
+  });
+}
+
+function scheduleHistoryHtml(c) {
+  const actionLabels = { scheduled:'予定設定', rescheduled:'再調整・予定変更', postponed:'延期', cancelled:'予定取消' };
+  const entries = [...(c.scheduleHistory || [])].sort((a,b) => String(b.changedAt).localeCompare(String(a.changedAt)));
+  return entries.length ? `<div class="schedule-history">${entries.map(entry => {
+    const oldPlan = entry.oldAt ? `${fmtDateTime(entry.oldAt)}（${entry.oldDurationMinutes}分）` : '未定';
+    const newPlan = entry.newAt ? `${fmtDateTime(entry.newAt)}（${entry.newDurationMinutes}分）` : '未定';
+    const plan = entry.action === 'scheduled' ? newPlan : `${oldPlan} → ${newPlan}`;
+    return `<article class="schedule-history-item"><div><span class="event-kind ${entry.type}">${esc(SCHEDULE_TYPES[entry.type])}</span><b>${esc(actionLabels[entry.action] || entry.action)}</b></div><strong>${esc(plan)}</strong>${entry.reasonCategory ? `<span>理由：${esc(scheduleReasonLabel(entry.reasonCategory))}${entry.reason ? `／${esc(entry.reason)}` : ''}</span>` : ''}<small>${esc(entry.changedAt ? new Date(entry.changedAt).toLocaleString('ja-JP') : '日時未登録')} ／ ${esc(entry.changedBy || '担当未登録')}</small></article>`;
+  }).join('')}</div>` : '<div class="muted">予定変更履歴はありません。</div>';
+}
+
+function lifecycleActionsHtml(c) {
+  const manage = can(sessionRole, 'manageLifecycle');
+  const restore = can(sessionRole, 'restoreLifecycle');
+  const buttons = [];
+  if (manage && isOperationalCase(c)) buttons.push('<button id="cancelCase" class="btn danger" type="button">案件を取消</button>');
+  if (restore && isCancelledCase(c)) buttons.push('<button id="restoreCancelledCase" class="btn" type="button">取消を解除</button>');
+  if (manage && !isArchivedCase(c) && (c.status === '完了' || isCancelledCase(c))) buttons.push('<button id="archiveCase" class="btn" type="button">アーカイブ</button>');
+  if (restore && isArchivedCase(c)) buttons.push('<button id="unarchiveCase" class="btn" type="button">アーカイブ解除</button>');
+  return buttons.join('');
+}
+
+function lifecycleStatusHtml(c) {
+  if (!isCancelledCase(c) && !isArchivedCase(c)) return '';
+  return `<section class="card detail-card lifecycle-state ${isCancelledCase(c) ? 'cancelled' : ''}"><h2 class="section-title">案件ライフサイクル</h2>${isCancelledCase(c) ? `<div><b>取消済み</b><p>${esc(cancelReasonLabel(c.cancelReasonCategory))}${c.cancelReason ? `／${esc(c.cancelReason)}` : ''}</p><small>${esc(c.cancelledAt ? new Date(c.cancelledAt).toLocaleString('ja-JP') : '日時未登録')} ／ ${esc(c.cancelledBy || '担当未登録')}</small></div>` : ''}${isArchivedCase(c) ? `<div><b>アーカイブ済み</b><p>${esc(c.archiveReason || '理由未登録')}</p><small>${esc(c.archivedAt ? new Date(c.archivedAt).toLocaleString('ja-JP') : '日時未登録')} ／ ${esc(c.archivedBy || '担当未登録')}</small></div>` : ''}</section>`;
 }
 
 function persist(message) {
@@ -124,10 +172,14 @@ function nextAction(c) {
 
 function ensurePhase2Ui() {
   $('view-home').insertAdjacentHTML('afterend', '<section id="view-worker" class="view hidden"><div class="worker-hero"><div><span class="worker-kicker">職人用</span><h1>今日の現場</h1><p class="muted">担当している現場だけを表示します。</p></div><div id="workerTodayCount" class="worker-count">0件</div></div><div id="workerToday"></div><section class="home-section"><div class="section-head"><div><h2>今後7日間の担当予定</h2><p class="muted">現調と工事を時間順に表示します。</p></div></div><div id="workerUpcoming"></div></section></section>');
+  $('view-cases').querySelector('.search').insertAdjacentHTML('beforebegin', '<div id="caseModeTabs" class="subtabs case-mode-tabs"><button class="btn primary" type="button" data-case-mode="active">進行中</button><button class="btn" type="button" data-case-mode="past">過去案件</button></div><label id="pastCaseFilterLabel" class="past-case-filter hidden"><span class="field-label">過去案件の種別</span><select id="pastCaseFilter" class="select"><option value="all">完了・取消・アーカイブすべて</option><option value="complete">完了</option><option value="cancelled">取消</option><option value="archived">アーカイブ済</option></select></label>');
   const nextActionLabel = $('caseForm').elements.nextActionOverride.closest('label');
   const oldDelivery = $('caseForm').querySelector('input[name="materialDeliveryAt"]');
   nextActionLabel.insertAdjacentHTML('beforebegin', '<div class="two material-fields"><label><span>材料発注日</span><input class="input" type="date" name="materialOrderedAt"></label><label><span>材料納品予定日</span><input class="input" type="date" name="materialDeliveryAt"></label></div><div class="two material-fields"><label><span>材料納品確認日</span><input class="input" type="date" name="materialReceivedAt"></label><label><span>仕入先</span><input class="input" name="supplier" placeholder="○○サッシ株式会社"></label></div><label class="material-fields"><span>材料メモ</span><textarea class="textarea" name="materialNote" placeholder="別便・不足部材など"></textarea></label>');
   oldDelivery?.closest('label')?.remove();
+  const scheduleReasons = '<option value="">変更理由を選択</option>' + SCHEDULE_REASON_CATEGORIES.map(([value,label]) => `<option value="${value}">${label}</option>`).join('');
+  $('surveyEndPreview').insertAdjacentHTML('afterend', `<div id="surveyScheduleReason" class="schedule-change-reason hidden"><label><span>現調予定の変更理由（必須）</span><select class="select" name="surveyReasonCategory">${scheduleReasons}</select></label><label><span>理由詳細（その他は必須）</span><input class="input" name="surveyReason" placeholder="変更内容を簡潔に入力"></label></div>`);
+  $('workEndPreview').insertAdjacentHTML('afterend', `<div id="workScheduleReason" class="schedule-change-reason hidden"><label><span>工事予定の変更理由（必須）</span><select class="select" name="workReasonCategory">${scheduleReasons}</select></label><label><span>理由詳細（その他は必須）</span><input class="input" name="workReason" placeholder="変更内容を簡潔に入力"></label></div>`);
   [
     ['survey-staff-undecided','現調担当未定'], ['work-staff-undecided','工事担当未定'], ['staff-undecided','担当未定すべて'],
     ['material-unordered','材料未発注'], ['material-overdue','納品遅延'], ['after-photo-missing','施工後写真不足']
@@ -140,6 +192,7 @@ function ensurePhase2Ui() {
   roomLabel.innerHTML = '<span>部屋</span><select class="select" name="roomId" required></select><input type="hidden" name="room">';
   propertyLabel.closest('.two').insertAdjacentHTML('afterend', '<div id="casePropertyInfo" class="property-reference"></div><div class="case-master-actions"><button id="newPropertyFromCase" class="btn property-create-link hidden" type="button">＋ 新しい物件を登録</button><button id="newRoomFromCase" class="btn property-create-link hidden" type="button">＋ 未登録の部屋を追加</button></div>');
   document.body.insertAdjacentHTML('beforeend', `<div id="propertyAdminModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="propertyAdminTitle"><div class="modalbox property-admin-modal"><div class="modalhead"><div id="propertyAdminTitle" class="big">物件情報</div><button id="closePropertyAdmin" class="btn" type="button">閉じる</button></div><p class="muted">物件共通情報と、この物件に紐づく案件を確認できます。</p><section id="propertyFormSection"><form id="propertyForm" class="form property-form"><input type="hidden" name="id"><div class="two"><label><span>物件名</span><input class="input" name="name" required></label><label><span>住所</span><input class="input" name="address"></label></div><div class="two"><label><span>管理会社</span><input class="input" name="managementCompany"></label><label><span>オーナー名</span><input class="input" name="ownerName"></label></div><div class="two"><label><span>駐車情報</span><input class="input" name="parkingInfo"></label><label><span>入館／鍵／アクセス情報</span><input class="input" name="accessInfo"></label></div><label><span>物件共通備考</span><textarea class="textarea" name="commonNote"></textarea></label><label class="confirm-check"><input type="checkbox" name="active" checked><span>有効な物件として使用する</span></label><div class="actions"><button class="btn primary" type="submit">物件を保存</button><button id="clearPropertyForm" class="btn" type="button">新規入力に戻す</button></div><div id="propertyFormError" class="form-error hidden" role="alert"></div></form></section><div id="propertyAdminList" class="property-admin-list"></div></div></div><div id="propertyDetailModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="propertyDetailTitle"><div class="modalbox property-detail-modal"><div class="modalhead"><div id="propertyDetailTitle" class="big">物件詳細</div><button id="closePropertyDetail" class="btn" type="button">閉じる</button></div><div id="propertyDetailContent"></div></div></div><div id="duplicateCaseModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="duplicateCaseTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="duplicateCaseTitle" class="big">⚠ この部屋には進行中の案件があります</div></div><div id="duplicateCaseDetails" class="conflict-details"></div><p>このまま新しい案件を登録しますか？</p><div class="warning-actions"><button id="duplicateCaseReview" class="btn primary" type="button">既存案件を確認</button><button id="duplicateCaseProceed" class="btn danger" type="button">このまま登録</button><button id="duplicateCaseCancel" class="btn" type="button">キャンセル</button></div></div></div>`);
+  document.body.insertAdjacentHTML('beforeend', '<div id="lifecycleActionModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="lifecycleActionTitle"><div class="modalbox account-modal"><div class="modalhead"><div id="lifecycleActionTitle" class="big">案件操作</div><button id="closeLifecycleAction" class="btn" type="button">閉じる</button></div><p id="lifecycleActionDescription" class="muted"></p><form id="lifecycleActionForm" class="form"><label id="lifecycleReasonCategoryLabel"><span>理由カテゴリ</span><select class="select" name="reasonCategory"></select></label><label><span id="lifecycleReasonLabel">理由詳細</span><textarea class="textarea" name="reason" placeholder="理由を簡潔に入力"></textarea></label><div id="lifecycleActionError" class="form-error hidden" role="alert"></div><button id="lifecycleActionSubmit" class="btn danger full" type="submit">実行する</button></form></div></div>');
 }
 
 function show(view) {
@@ -158,7 +211,7 @@ function show(view) {
 
 function caseRow(c) {
   const alerts = getCaseAlerts(state, c);
-  return `<button class="case open-case" data-id="${esc(c.id)}"><div class="caseHead"><div><b>${esc(c.property)} ${esc(c.room)}</b><div class="next-action">次：${esc(nextAction(c))}</div><div class="muted">現調：${esc(c.surveyStaff)} ／ 工事：${esc(c.workStaff)}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${alerts.slice(0,2).map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div></div></button>`;
+  return `<button class="case open-case ${isArchivedCase(c) ? 'archived-case' : ''}" data-id="${esc(c.id)}"><div class="caseHead"><div><b>${esc(c.property)} ${esc(c.room)}</b><div class="next-action">次：${esc(nextAction(c))}</div><div class="muted">現調：${esc(c.surveyStaff)} ／ 工事：${esc(c.workStaff)}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${isCancelledCase(c) ? '<span class="badge cancelled-badge">取消</span>' : ''}${isArchivedCase(c) ? '<span class="badge inactive-badge">アーカイブ</span>' : ''}${alerts.slice(0,2).map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div></div></button>`;
 }
 
 function wireCaseLinks(root = document) {
@@ -168,7 +221,7 @@ function wireCaseLinks(root = document) {
 function renderHome() {
   const today = todayKey();
   const metrics = getDashboardMetrics(state);
-  const allCases = dataAccess.cases.list();
+  const allCases = dataAccess.cases.list().filter(isOperationalCase);
   const surveys = allCases.filter(c => datePart(c.surveyAt) === today);
   const works = allCases.filter(c => datePart(c.workAt) === today);
   $('stOpen').textContent = metrics.open;
@@ -215,10 +268,21 @@ function renderCases() {
   const query = $('search').value.trim().toLowerCase();
   const selected = filter.value;
   const preset = $('casePreset').value;
-  const cases = dataAccess.cases.list().filter(c => (sessionRole !== 'worker' || ownsCase(c)) && (selected === 'all' || c.status === selected) && matchesCasePreset(state, c, preset) && `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)}`.toLowerCase().includes(query));
+  if (sessionRole === 'worker') caseListMode = 'active';
+  const pastFilter = $('pastCaseFilter').value;
+  const cases = dataAccess.cases.list().filter(c => {
+    const modeMatch = caseListMode === 'past' ? matchesPastCase(c, pastFilter) : isOperationalCase(c);
+    const searchable = `${c.property} ${c.room} ${c.residentName} ${c.surveyStaff} ${c.workStaff} ${nextAction(c)} ${c.cancelReason || ''}`.toLowerCase();
+    return modeMatch && (sessionRole !== 'worker' || ownsCase(c)) && (selected === 'all' || c.status === selected) && (caseListMode === 'past' || matchesCasePreset(state, c, preset)) && searchable.includes(query);
+  });
+  document.querySelectorAll('[data-case-mode]').forEach(button => button.classList.toggle('primary', button.dataset.caseMode === caseListMode));
+  $('pastCaseFilterLabel').classList.toggle('hidden', caseListMode !== 'past');
+  $('filter').classList.toggle('hidden', caseListMode === 'past');
+  $('casePreset').classList.toggle('hidden', caseListMode === 'past');
+  $('newCase').classList.toggle('hidden', caseListMode === 'past');
   const presetLabel = $('casePreset').selectedOptions[0]?.textContent || '';
-  $('activeCaseFilterText').textContent = preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
-  $('activeCaseFilter').classList.toggle('hidden', preset === 'all');
+  $('activeCaseFilterText').textContent = caseListMode === 'past' ? `過去案件：${cases.length}件` : preset === 'all' ? '' : `${presetLabel}：${cases.length}件`;
+  $('activeCaseFilter').classList.toggle('hidden', caseListMode === 'active' && preset === 'all');
   $('caseList').innerHTML = cases.map(caseRow).join('') || '<div class="card empty">該当案件はありません。</div>';
   wireCaseLinks($('caseList'));
 }
@@ -272,17 +336,21 @@ function openDetail(id) {
   }
   currentCaseId = id;
   const alerts = getCaseAlerts(state, c);
+  const active = isOperationalCase(c);
+  const lifecycleBadges = `${isCancelledCase(c) ? '<span class="badge cancelled-badge">取消</span>' : ''}${isArchivedCase(c) ? '<span class="badge inactive-badge">アーカイブ</span>' : ''}`;
   $('detailCard').innerHTML = `
-    <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div><div class="muted">${esc(c.residentName || '入居者名未登録')}</div></div><span class="badge">${esc(c.status)}</span></div><div class="kv"><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
+    <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div><div class="muted">${esc(c.residentName || '入居者名未登録')}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${lifecycleBadges}</div></div><div class="kv"><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
+    ${lifecycleStatusHtml(c)}
     <section class="card detail-card action-card"><div class="lab">次のアクション</div><div class="big">${esc(nextAction(c))}</div>${alerts.length ? `<div class="detail-alerts">${alerts.map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div>` : '<div class="muted">現在、要対応アラートはありません。</div>'}</section>
     <section class="card detail-card"><h2 class="section-title">入居者回答</h2>${answerHtml(c)}</section>
-    <section class="card detail-card"><h2 class="section-title">現調</h2><div class="kv"><div><div class="lab">現調担当</div><div class="val">${esc(c.surveyStaff)}</div></div><div><div class="lab">現調予定時間</div><div class="val">${esc(formatPlan(c.surveyAt, c.surveyDurationMinutes))}</div></div></div><div class="gallery single-gallery">${photoGroupHtml(c,'survey',PHOTO_GROUPS.survey)}</div></section>
+    <section class="card detail-card"><div class="section-head"><h2 class="section-title">現調</h2>${active && can(sessionRole, 'manageLifecycle') && c.surveyAt ? '<button class="btn postpone-schedule" data-type="survey" type="button">現調を延期</button>' : ''}</div><div class="kv"><div><div class="lab">現調担当</div><div class="val">${esc(c.surveyStaff)}</div></div><div><div class="lab">現調予定時間</div><div class="val">${esc(formatPlan(c.surveyAt, c.surveyDurationMinutes))}</div></div></div><div class="gallery single-gallery">${photoGroupHtml(c,'survey',PHOTO_GROUPS.survey)}</div></section>
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
     <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
-    <section class="card detail-card"><h2 class="section-title">工事</h2><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定時間</div><div class="val">${esc(formatPlan(c.workAt, c.workDurationMinutes))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
-    <div class="actions"><button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button>${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}</div>
+    <section class="card detail-card"><div class="section-head"><h2 class="section-title">工事</h2>${active && can(sessionRole, 'manageLifecycle') && c.workAt ? '<button class="btn postpone-schedule" data-type="work" type="button">工事を延期</button>' : ''}</div><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定時間</div><div class="val">${esc(formatPlan(c.workAt, c.workDurationMinutes))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
+    <div class="actions">${active ? '<button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button>' : ''}${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}${lifecycleActionsHtml(c)}</div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
     <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
+    <section class="card detail-card"><h2 class="section-title">予定変更・案件履歴</h2>${scheduleHistoryHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">この案件の変更履歴</h2><div class="case-history">${caseHistoryHtml(c)}</div></section>`;
   wireDetail(c);
   show('detail');
@@ -308,17 +376,91 @@ function advanceCase(c, targetStatus) {
   openDetail(c.id);
 }
 
+function closeLifecycleAction() {
+  $('lifecycleActionModal').classList.add('hidden');
+  lifecycleActionContext = null;
+}
+
+function openLifecycleAction(c, action, type = '') {
+  if (!can(sessionRole, 'manageLifecycle')) return notify('この操作を行う権限がありません。');
+  lifecycleActionContext = { caseId:c.id, action, type };
+  const form = $('lifecycleActionForm');
+  form.reset();
+  setFormError('lifecycleActionError', '');
+  const isArchive = action === 'archive';
+  const choices = action === 'cancel' ? CANCEL_REASON_CATEGORIES : SCHEDULE_REASON_CATEGORIES;
+  form.elements.reasonCategory.innerHTML = '<option value="">理由を選択</option>' + choices.map(([value,label]) => `<option value="${value}">${label}</option>`).join('');
+  $('lifecycleReasonCategoryLabel').classList.toggle('hidden', isArchive);
+  const titles = { postpone:`${SCHEDULE_TYPES[type]}を延期`, cancel:'案件を取消', archive:'案件をアーカイブ' };
+  $('lifecycleActionTitle').textContent = titles[action] || '案件操作';
+  $('lifecycleActionDescription').textContent = action === 'postpone' ? '現在の予定を履歴へ残し、日時を未定へ戻します。理由は必須です。' : action === 'cancel' ? '案件は削除せず、取消案件として過去案件へ移動します。' : '案件・写真・回答・履歴を保持したまま通常画面から除外します。';
+  $('lifecycleReasonLabel').textContent = isArchive ? 'アーカイブ理由（任意）' : '理由詳細（その他は必須）';
+  $('lifecycleActionSubmit').textContent = action === 'postpone' ? '延期する' : action === 'cancel' ? '取消する' : 'アーカイブする';
+  $('lifecycleActionModal').classList.remove('hidden');
+  if (!isArchive) form.elements.reasonCategory.focus();
+}
+
+function saveLifecycleAction(event) {
+  event.preventDefault();
+  const context = lifecycleActionContext;
+  const c = context ? caseById(context.caseId) : null;
+  if (!c || !can(sessionRole, 'manageLifecycle')) return closeLifecycleAction();
+  const form = event.currentTarget;
+  const reasonCategory = form.elements.reasonCategory.value;
+  const reason = form.elements.reason.value.trim();
+  const details = { reasonCategory, reason, changedBy:sessionUser };
+  let result;
+  if (context.action === 'postpone') result = dataAccess.lifecycle.postponeSchedule(c.id, context.type, details);
+  if (context.action === 'cancel') result = dataAccess.lifecycle.cancel(c.id, details);
+  if (context.action === 'archive') result = dataAccess.lifecycle.archive(c.id, details);
+  if (!result?.ok) return setFormError('lifecycleActionError', result?.error || '操作できませんでした。');
+  if (context.action === 'postpone') {
+    const entry = result.entry;
+    addAudit(state, c, `${SCHEDULE_TYPES[context.type]}を延期（${fmtDateTime(entry.oldAt)} → 未定／理由：${scheduleReasonLabel(reasonCategory)}${reason ? `・${reason}` : ''}）`);
+  }
+  if (context.action === 'cancel') addAudit(state, c, `案件を取消（理由：${cancelReasonLabel(reasonCategory)}${reason ? `・${reason}` : ''}）`);
+  if (context.action === 'archive') addAudit(state, c, `案件をアーカイブ${reason ? `（理由：${reason}）` : ''}`);
+  persist(context.action === 'postpone' ? `${SCHEDULE_TYPES[context.type]}を延期しました。` : context.action === 'cancel' ? '案件を取消しました。' : '案件をアーカイブしました。');
+  closeLifecycleAction();
+  renderHome();
+  renderCases();
+  openDetail(c.id);
+}
+
+function restoreCancelled(c) {
+  if (!can(sessionRole, 'restoreLifecycle') || !confirm('この案件の取消を解除しますか？')) return;
+  const result = dataAccess.lifecycle.restore(c.id);
+  if (!result.ok) return notify(result.error);
+  addAudit(state, c, '案件の取消を解除');
+  persist('取消を解除しました。');
+  openDetail(c.id);
+}
+
+function restoreArchived(c) {
+  if (!can(sessionRole, 'restoreLifecycle') || !confirm('この案件のアーカイブを解除しますか？')) return;
+  const result = dataAccess.lifecycle.unarchive(c.id);
+  if (!result.ok) return notify(result.error);
+  addAudit(state, c, '案件のアーカイブを解除');
+  persist('アーカイブを解除しました。');
+  openDetail(c.id);
+}
+
 function wireDetail(c) {
   document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => handleFiles(c, input.dataset.key, event.target.files)));
   document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => deletePhoto(c, button.dataset.key, Number(button.dataset.index))));
-  $('advance').addEventListener('click', () => {
+  $('advance')?.addEventListener('click', () => {
     const index = STATUSES.indexOf(c.status);
     if (index < 0 || index >= STATUSES.length - 1) return notify('完了済みです。');
     const targetStatus = STATUSES[index + 1];
     requestPhotoCheckedAction(c, targetStatus, () => advanceCase(c, targetStatus));
   });
-  $('editCase').addEventListener('click', () => openCaseModal(c));
+  $('editCase')?.addEventListener('click', () => openCaseModal(c));
   $('viewCaseProperty')?.addEventListener('click', () => openPropertyDetail(c.propertyId));
+  document.querySelectorAll('.postpone-schedule').forEach(button => button.addEventListener('click', () => openLifecycleAction(c, 'postpone', button.dataset.type)));
+  $('cancelCase')?.addEventListener('click', () => openLifecycleAction(c, 'cancel'));
+  $('restoreCancelledCase')?.addEventListener('click', () => restoreCancelled(c));
+  $('archiveCase')?.addEventListener('click', () => openLifecycleAction(c, 'archive'));
+  $('unarchiveCase')?.addEventListener('click', () => restoreArchived(c));
 }
 
 function compressImage(file) {
@@ -378,6 +520,7 @@ function openCaseModal(c) {
   form.reset();
   form.elements.id.value = c?.id || '';
   const source = c || createCase();
+  editingCaseSnapshot = c ? clone(c) : null;
   ['property','room','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
   populateCasePropertySelect(source);
   populateCaseRoomSelect(source);
@@ -389,7 +532,15 @@ function openCaseModal(c) {
   form.elements.propertyId.focus();
 }
 
-function closeCaseModal() { $('modal').classList.add('hidden'); }
+function closeCaseModal() { $('modal').classList.add('hidden'); editingCaseSnapshot = null; }
+
+function addScheduleAudit(c, entry) {
+  if (!entry) return;
+  const label = SCHEDULE_TYPES[entry.type];
+  if (entry.action === 'scheduled') return addAudit(state, c, `${label}予定を新規設定（${fmtDateTime(entry.newAt)}／${entry.newDurationMinutes}分）`);
+  const reason = `${scheduleReasonLabel(entry.reasonCategory)}${entry.reason ? `・${entry.reason}` : ''}`;
+  addAudit(state, c, `${label}予定を変更（${fmtDateTime(entry.oldAt)} → ${fmtDateTime(entry.newAt)}／理由：${reason}）`);
+}
 
 function saveCaseForm(event) {
   event.preventDefault();
@@ -416,16 +567,40 @@ function saveCaseForm(event) {
   values.workStaffId = data.get('workStaffId') || '';
   values.surveyStaff = staffById(values.surveyStaffId)?.name || '未定';
   values.workStaff = staffById(values.workStaffId)?.name || '未定';
+  const scheduleChanges = Object.fromEntries(['survey','work'].map(type => [type, {
+    at:values[`${type}At`], durationMinutes:values[`${type}DurationMinutes`],
+    reasonCategory:data.get(`${type}ReasonCategory`) || '', reason:data.get(`${type}Reason`) || '', changedBy:sessionUser
+  }]));
+  for (const type of ['survey','work']) {
+    const oldAt = existing?.[`${type}At`] || '';
+    const newAt = scheduleChanges[type].at;
+    const oldDuration = Number(existing?.[`${type}DurationMinutes`] || 0);
+    const last = [...(existing?.scheduleHistory || [])].reverse().find(entry => entry.type === type);
+    const changedExisting = Boolean(oldAt) && (oldAt !== newAt || oldDuration !== Number(scheduleChanges[type].durationMinutes));
+    const rescheduling = !oldAt && Boolean(newAt) && last?.action === 'postponed';
+    if (oldAt && !newAt) return notify(`${SCHEDULE_TYPES[type]}を未定に戻す場合は、案件詳細の「延期」を使用してください。`);
+    if ((changedExisting || rescheduling) && !scheduleChanges[type].reasonCategory) return notify(`${SCHEDULE_TYPES[type]}予定の変更理由を選択してください。`);
+    if ((changedExisting || rescheduling) && scheduleChanges[type].reasonCategory === 'other' && !scheduleChanges[type].reason.trim()) return notify(`${SCHEDULE_TYPES[type]}予定の変更理由詳細を入力してください。`);
+  }
   const proposal = { ...c, ...values };
   const commit = (ignoredConflicts = [], ignoredDuplicate = false) => {
     const before = existing ? clone(existing) : null;
-    Object.assign(c, values);
+    const caseValues = { ...values };
+    delete caseValues.surveyAt;
+    delete caseValues.surveyDurationMinutes;
+    delete caseValues.workAt;
+    delete caseValues.workDurationMinutes;
+    Object.assign(c, caseValues);
     if (!existing) {
       recordWorkflowStep(c, '問い合わせ', sessionUser);
       dataAccess.cases.create(c);
+      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey).entry);
+      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work).entry);
       addAudit(state, c, '案件を新規登録');
     } else {
-      dataAccess.cases.update(c.id, values);
+      dataAccess.cases.update(c.id, caseValues);
+      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey).entry);
+      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work).entry);
       auditChanges(state, before, c);
       if (before.roomId !== c.roomId) addAudit(state, c, `部屋マスタ紐付けを ${roomById(before.roomId)?.roomNumber || before.room || '未定'} → ${selectedRoom.roomNumber} に変更`);
     }
@@ -582,7 +757,7 @@ function renderSchedule() {
   select.value = previous === 'all' || props.some(property => property.id === previous) ? previous : 'all';
   const selectedProperties = select.value === 'all' ? props : props.filter(property => property.id === select.value);
   const selectedIds = new Set(selectedProperties.map(property => property.id));
-  const cases = dataAccess.cases.list().filter(c => selectedIds.has(c.propertyId));
+  const cases = dataAccess.cases.list().filter(c => selectedIds.has(c.propertyId) && isOperationalCase(c));
   const roomGroups = groupCasesByRoom(cases);
   $('scheduleSummary').innerHTML = [
     ['回答待ち', roomGroups.filter(group => group.cases.some(c => !responseForCase(c) && c.note.includes('回答待ち'))).length],
@@ -708,6 +883,8 @@ function renderStaffSchedule() {
 }
 
 function openCasePreset(preset) {
+  caseListMode = preset === 'complete' ? 'past' : 'active';
+  if (preset === 'complete') $('pastCaseFilter').value = 'complete';
   if (preset === 'open' && ![...$('casePreset').options].some(option => option.value === 'open')) $('casePreset').add(new Option('進行中', 'open'));
   $('casePreset').value = preset;
   $('filter').value = 'all';
@@ -718,6 +895,7 @@ function clearCaseFilters() {
   $('search').value = '';
   $('filter').value = 'all';
   $('casePreset').value = 'all';
+  if (caseListMode === 'past') $('pastCaseFilter').value = 'all';
   renderCases();
 }
 
@@ -729,6 +907,7 @@ function setFormError(id, message) {
 
 function updateRoleUi(role) {
   const worker = role === 'worker';
+  if (worker) caseListMode = 'active';
   $('appRoot').classList.toggle('worker-mode', worker);
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('role-hidden', worker && button.dataset.view !== 'home'));
   $('back').textContent = worker ? '← 今日の現場' : '← 案件一覧';
@@ -1168,6 +1347,11 @@ async function init() {
   $('closeModal').addEventListener('click', closeCaseModal);
   $('modal').addEventListener('click', event => { if (event.target === $('modal')) closeCaseModal(); });
   $('caseForm').addEventListener('submit', saveCaseForm);
+  document.querySelectorAll('[data-case-mode]').forEach(button => button.addEventListener('click', () => { caseListMode = button.dataset.caseMode; $('search').value = ''; $('filter').value = 'all'; $('casePreset').value = 'all'; renderCases(); }));
+  $('pastCaseFilter').addEventListener('change', renderCases);
+  $('closeLifecycleAction').addEventListener('click', closeLifecycleAction);
+  $('lifecycleActionModal').addEventListener('click', event => { if (event.target === $('lifecycleActionModal')) closeLifecycleAction(); });
+  $('lifecycleActionForm').addEventListener('submit', saveLifecycleAction);
   $('residentForm').addEventListener('submit', saveResidentResponse);
   $('scheduleProperty').addEventListener('change', renderSchedule);
   document.querySelectorAll('[data-schedule-mode]').forEach(button => button.addEventListener('click', () => setScheduleMode(button.dataset.scheduleMode)));
@@ -1188,6 +1372,8 @@ async function init() {
     $('search').value = '';
     $('filter').innerHTML = '';
     $('casePreset').value = 'all';
+    caseListMode = 'active';
+    $('pastCaseFilter').value = 'all';
     $('historyUser').innerHTML = '';
     $('historyProperty').innerHTML = '';
     renderCases(); renderHome();

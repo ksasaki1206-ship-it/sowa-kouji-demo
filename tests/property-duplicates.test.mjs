@@ -6,7 +6,9 @@ const state = { cases:[
   { ...base, id:'open-101' },
   { ...base, id:'done-101', status:'完了' },
   { ...base, id:'open-102', roomId:'room-002', room:'102号室' },
-  { ...base, id:'other-property', propertyId:'property-002' }
+  { ...base, id:'other-property', propertyId:'property-002' },
+  { ...base, id:'cancelled-101', lifecycleStatus:'cancelled' },
+  { ...base, id:'archived-101', isArchived:true }
 ] };
 
 assert.deepEqual(findDuplicateCases(state, { ...base, id:'new-case' }).map(item => item.id), ['open-101']);

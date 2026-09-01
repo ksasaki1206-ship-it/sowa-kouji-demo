@@ -1,5 +1,5 @@
-import { STORAGE_KEY, createInitialState, migrateState } from './data.js?v=20260901-18';
-import { localStorageDriver } from './storage-driver.js?v=20260901-18';
+import { STORAGE_KEY, createInitialState, migrateState } from './data.js?v=20260901-19';
+import { localStorageDriver } from './storage-driver.js?v=20260901-19';
 
 export function loadState() {
   try {
