@@ -1,12 +1,13 @@
 import { STATUSES, SURVEY_STAFF, WORK_STAFF, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
 import { loadState, saveState, resetState } from './storage.js';
 import { addAudit, auditChanges } from './audit.js';
-import { USERS, getSession, login, logout as clearSession } from './auth.js';
+import { USER_DEFINITIONS, USERS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
 
 let state = loadState();
 let currentCaseId = null;
 let noticeTimer = 0;
 let sessionUser = '';
+let sessionRole = '';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmtDateTime = value => value ? value.replace('T', ' ').replaceAll('-', '/') : '未定';
@@ -332,32 +333,103 @@ function setDefaultResponseDates() {
 
 function showLogin() {
   sessionUser = '';
+  sessionRole = '';
   $('appRoot').classList.add('hidden');
   $('loginView').classList.remove('hidden');
+  $('loginPassword').value = '';
+  setFormError('loginError', '');
   $('loginUser').focus();
 }
 
-function activateSession(user) {
-  if (!USERS.includes(user)) return showLogin();
-  sessionUser = user;
-  state.currentUser = user;
+function setFormError(id, message) {
+  const node = $(id);
+  node.textContent = message;
+  node.classList.toggle('hidden', !message);
+}
+
+function activateSession(session) {
+  if (!session || !USERS.includes(session.user)) return showLogin();
+  sessionUser = session.user;
+  sessionRole = session.role;
+  state.currentUser = session.user;
   saveState(state);
-  $('loggedInUser').textContent = user;
+  $('loggedInUser').textContent = session.user;
+  $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
   $('loginView').classList.add('hidden');
   $('appRoot').classList.remove('hidden');
   show('home');
 }
 
-function init() {
+async function handleLogin(event) {
+  event.preventDefault();
+  const session = await authenticate($('loginUser').value, $('loginPassword').value);
+  if (!session) return setFormError('loginError', 'ユーザーまたはパスワードが正しくありません');
+  setFormError('loginError', '');
+  state.currentUser = session.user;
+  addAudit(state, {}, 'ログイン', session.user);
+  persist();
+  activateSession(session);
+}
+
+function openPasswordModal() {
+  $('passwordForm').reset();
+  setFormError('passwordError', '');
+  $('passwordModal').classList.remove('hidden');
+  $('passwordForm').elements.currentPassword.focus();
+}
+
+function closePasswordModal() { $('passwordModal').classList.add('hidden'); }
+
+async function saveOwnPassword(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const currentPassword = form.elements.currentPassword.value;
+  const newPassword = form.elements.newPassword.value;
+  if (newPassword !== form.elements.confirmPassword.value) return setFormError('passwordError', '新しいパスワードが一致しません。');
+  const result = await changeOwnPassword(sessionUser, currentPassword, newPassword);
+  if (!result.ok) return setFormError('passwordError', result.error);
+  addAudit(state, {}, '自分のパスワードを変更');
+  persist('パスワードを変更しました。');
+  closePasswordModal();
+}
+
+function renderUserAdmin() {
+  $('userAdminList').innerHTML = USER_DEFINITIONS.map(user => `<div class="user-admin-row"><div><b>${esc(user.name)}</b><span class="muted">${esc(ROLE_DEFINITIONS[user.role]?.label || user.role)}</span></div><button class="btn reset-password" type="button" data-user="${esc(user.name)}">パスワードをリセット</button></div>`).join('');
+  $('userAdminList').querySelectorAll('.reset-password').forEach(button => button.addEventListener('click', async () => {
+    const target = button.dataset.user;
+    if (!confirm(`${target}のパスワードを初期値へ戻しますか？`)) return;
+    const result = await resetUserPassword(sessionRole, target);
+    if (!result.ok) return notify(result.error);
+    addAudit(state, {}, `${target}のパスワードをリセット`);
+    persist(`${target}のパスワードをリセットしました。`);
+  }));
+}
+
+function openUserAdmin() {
+  if (!can(sessionRole, 'manageUsers')) return;
+  renderUserAdmin();
+  $('userAdminModal').classList.remove('hidden');
+}
+
+function closeUserAdmin() { $('userAdminModal').classList.add('hidden'); }
+
+async function init() {
+  await ensureCredentials();
   populateSelect($('loginUser'), USERS);
   populateSelect($('statusSelect'), STATUSES);
   populateSelect($('surveyStaffSelect'), SURVEY_STAFF);
   populateSelect($('workStaffSelect'), WORK_STAFF);
   setDefaultResponseDates();
   persist();
-  $('loginButton').addEventListener('click', () => activateSession(login($('loginUser').value).user));
-  $('loginUser').addEventListener('keydown', event => { if (event.key === 'Enter') $('loginButton').click(); });
-  $('logoutButton').addEventListener('click', () => { clearSession(); showLogin(); });
+  $('loginForm').addEventListener('submit', handleLogin);
+  $('logoutButton').addEventListener('click', () => { addAudit(state, {}, 'ログアウト'); persist(); clearSession(); showLogin(); });
+  $('passwordButton').addEventListener('click', openPasswordModal);
+  $('closePasswordModal').addEventListener('click', closePasswordModal);
+  $('passwordModal').addEventListener('click', event => { if (event.target === $('passwordModal')) closePasswordModal(); });
+  $('passwordForm').addEventListener('submit', saveOwnPassword);
+  $('userAdminButton').addEventListener('click', openUserAdmin);
+  $('closeUserAdminModal').addEventListener('click', closeUserAdmin);
+  $('userAdminModal').addEventListener('click', event => { if (event.target === $('userAdminModal')) closeUserAdmin(); });
   document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => show(button.dataset.view)));
   document.querySelectorAll('[data-response-mode]').forEach(button => button.addEventListener('click', () => setResponseMode(button.dataset.responseMode)));
   $('search').addEventListener('input', renderCases);
@@ -374,9 +446,10 @@ function init() {
   window.addEventListener('hashchange', () => {
     if (location.hash.startsWith('#case-')) openDetail(decodeURIComponent(location.hash.slice(6)));
   });
-  $('resetDemo').addEventListener('click', () => {
+  $('resetDemo').addEventListener('click', async () => {
     if (!confirm('デモ内容と写真、変更履歴を初期状態に戻しますか？')) return;
     state = resetState();
+    await resetAllPasswords();
     state.currentUser = sessionUser;
     saveState(state);
     $('filter').innerHTML = '';
@@ -386,7 +459,7 @@ function init() {
     notify('初期状態に戻しました。');
   });
   const session = getSession();
-  session && USERS.includes(session.user) ? activateSession(session.user) : showLogin();
+  session && USERS.includes(session.user) ? activateSession(session) : showLogin();
 }
 
-init();
+init().catch(error => { console.error('アプリの初期化に失敗しました。', error); showLogin(); });

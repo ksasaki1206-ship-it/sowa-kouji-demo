@@ -1,4 +1,7 @@
 export const AUTH_KEY = 'sowa-demo-auth-v1';
+export const CREDENTIALS_KEY = 'sowa-demo-credentials-v1';
+const DEFAULT_PASSWORD = 'password';
+export const MIN_PASSWORD_LENGTH = 6;
 
 export const USER_DEFINITIONS = Object.freeze([
   { id:'nishiyama', name:'西山さん', role:'admin' },
@@ -11,7 +14,7 @@ export const USER_DEFINITIONS = Object.freeze([
 export const USERS = USER_DEFINITIONS.map(user => user.name);
 
 export const ROLE_DEFINITIONS = Object.freeze({
-  admin: { label:'管理者', capabilities:['view','edit','schedule','responses','history','photos','create'] },
+  admin: { label:'管理者', capabilities:['view','edit','schedule','responses','history','photos','create','manageUsers'] },
   office: { label:'事務所', capabilities:['view','edit','schedule','responses','history','photos','create'] },
   worker: { label:'職人', capabilities:['view','edit','schedule','responses','history','photos','create'], futureRestricted:true }
 });
@@ -22,6 +25,53 @@ export function getUserDefinition(name) {
 
 export function can(role, capability) {
   return Boolean(ROLE_DEFINITIONS[role]?.capabilities.includes(capability));
+}
+
+async function hashPassword(userId, password) {
+  const input = new TextEncoder().encode(`sowa-demo:${userId}:${password}`);
+  const digest = await crypto.subtle.digest('SHA-256', input);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function readCredentials() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CREDENTIALS_KEY) || 'null');
+    return saved && typeof saved === 'object' && saved.users && typeof saved.users === 'object'
+      ? saved
+      : { version:1, users:{} };
+  } catch {
+    return { version:1, users:{} };
+  }
+}
+
+function writeCredentials(credentials) {
+  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
+}
+
+async function defaultCredential(user) {
+  return { hash:await hashPassword(user.id, DEFAULT_PASSWORD), updatedAt:new Date().toISOString() };
+}
+
+export async function ensureCredentials() {
+  const credentials = readCredentials();
+  let changed = false;
+  for (const user of USER_DEFINITIONS) {
+    if (!credentials.users[user.id]?.hash) {
+      credentials.users[user.id] = await defaultCredential(user);
+      changed = true;
+    }
+  }
+  if (changed || !localStorage.getItem(CREDENTIALS_KEY)) writeCredentials(credentials);
+  return credentials;
+}
+
+export async function authenticate(userName, password) {
+  const user = getUserDefinition(userName);
+  if (!user || typeof password !== 'string') return null;
+  const credentials = await ensureCredentials();
+  const hash = await hashPassword(user.id, password);
+  if (credentials.users[user.id]?.hash !== hash) return null;
+  return login(user.name);
 }
 
 export function getSession() {
@@ -44,4 +94,32 @@ export function login(user) {
 
 export function logout() {
   localStorage.removeItem(AUTH_KEY);
+}
+
+export async function changeOwnPassword(userName, currentPassword, newPassword) {
+  const user = getUserDefinition(userName);
+  if (!user) return { ok:false, error:'ユーザー情報を確認できません。' };
+  if (newPassword.length < MIN_PASSWORD_LENGTH) return { ok:false, error:`新しいパスワードは${MIN_PASSWORD_LENGTH}文字以上で入力してください。` };
+  const credentials = await ensureCredentials();
+  const currentHash = await hashPassword(user.id, currentPassword);
+  if (credentials.users[user.id]?.hash !== currentHash) return { ok:false, error:'現在のパスワードが正しくありません。' };
+  credentials.users[user.id] = { hash:await hashPassword(user.id, newPassword), updatedAt:new Date().toISOString() };
+  writeCredentials(credentials);
+  return { ok:true };
+}
+
+export async function resetUserPassword(actorRole, targetUserName) {
+  if (!can(actorRole, 'manageUsers')) return { ok:false, error:'この操作を行う権限がありません。' };
+  const target = getUserDefinition(targetUserName);
+  if (!target) return { ok:false, error:'対象ユーザーが見つかりません。' };
+  const credentials = await ensureCredentials();
+  credentials.users[target.id] = await defaultCredential(target);
+  writeCredentials(credentials);
+  return { ok:true, user:target };
+}
+
+export async function resetAllPasswords() {
+  const credentials = { version:1, users:{} };
+  for (const user of USER_DEFINITIONS) credentials.users[user.id] = await defaultCredential(user);
+  writeCredentials(credentials);
 }
