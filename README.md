@@ -2,6 +2,8 @@
 
 総和様向け工事進捗管理デモです。外部サービスやビルド工程を使わない静的サイトのため、GitHub Pagesでそのまま公開できます。
 
+公開入口は用途別に分離しています。`index.html` は従来のlocalStorageデモ、`staging.html` はCloud Run staging APIとIdentity Platformを利用する共有試用環境です。staging入口は `index.html` の画面定義と同じCSS/JavaScript資産を読み込みますが、保存先・認証modeはmeta設定で明確に分離し、HTTP失敗時にlocalStorageへfallbackしません。
+
 ## 構成
 
 - `index.html`: 画面の構造と読み込み口

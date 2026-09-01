@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="sowa-data-source" content="http">
+  <meta name="sowa-api-base-url" content="https://sowa-kouji-api-staging-742289385009.asia-northeast1.run.app">
+  <meta name="sowa-api-auth-mode" content="identity">
+  <meta name="sowa-api-timeout-ms" content="12000">
+  <title>総和 工事進捗管理（試用環境）</title>
+  <link rel="stylesheet" href="assets/css/styles.css?v=20260901-22">
+</head>
+<body>
+  <main id="stagingLoading" class="login-shell">
+    <div class="login-card"><p class="muted">試用環境を読み込んでいます。</p></div>
+  </main>
+  <script type="module">
+    try {
+      const response = await fetch('./index.html', { cache:'no-cache' });
+      if (!response.ok) throw new Error(`画面定義を取得できませんでした。（${response.status}）`);
+      const source = new DOMParser().parseFromString(await response.text(), 'text/html');
+      source.querySelector('script[src*="bootstrap.js"]')?.remove();
+      document.body.replaceChildren(...[...source.body.childNodes].map(node => document.importNode(node, true)));
+
+      document.querySelector('.topbar .muted').textContent = '試用環境';
+      document.querySelector('#residentPublicView .login-note').textContent = 'このページは総和工業の試用回答画面です。';
+      document.querySelector('footer.foot').textContent = '※試用環境のデータはクラウドで共有されます。';
+      const resetButton = document.getElementById('resetDemo');
+      resetButton.classList.add('hidden');
+      resetButton.setAttribute('aria-hidden', 'true');
+
+      await import('./assets/js/bootstrap.js?v=20260902-24');
+    } catch (error) {
+      console.error('試用環境を読み込めませんでした。', error);
+      document.getElementById('stagingLoading').innerHTML = '<div class="login-card"><h1>試用環境を読み込めませんでした</h1><p class="muted">時間をおいて再読み込みしてください。</p></div>';
+    }
+  </script>
+</body>
+</html>
