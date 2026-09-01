@@ -1,8 +1,8 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js';
-import { dataAccess } from './data-access.js';
-import { addAudit, auditChanges } from './audit.js';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, clone, todayKey, plusDays } from './data.js?v=20260901-16';
+import { dataAccess } from './data-access.js?v=20260901-16';
+import { addAudit, auditChanges } from './audit.js?v=20260901-16';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-16';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-16';
 
 let state = dataAccess.snapshot.load();
 let currentCaseId = null;

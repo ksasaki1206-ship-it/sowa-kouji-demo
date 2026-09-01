@@ -1,5 +1,5 @@
-import { loadState, saveState, resetState } from './storage.js';
-import { repositories } from './repositories.js';
+import { loadState, saveState, resetState } from './storage.js?v=20260901-16';
+import { repositories } from './repositories.js?v=20260901-16';
 
 const bindRepository = (repository, getState) => Object.freeze(Object.fromEntries(
   Object.keys(repository).map(method => [method, (...args) => repository[method](getState(), ...args)])

@@ -8,7 +8,7 @@ const jsRoot = join(root, 'assets', 'js');
 const files = (await readdir(jsRoot)).filter(name => name.endsWith('.js'));
 const sources = new Map(await Promise.all(files.map(async name => [name, await readFile(join(jsRoot, name), 'utf8')])));
 const imports = new Map(files.map(name => [name, [...sources.get(name).matchAll(/from\s+['"](\.\/[^'"]+)['"]/g)]
-  .map(match => normalize(join(dirname(name), match[1])))
+  .map(match => normalize(join(dirname(name), match[1].replace(/[?#].*$/, ''))))
   .map(path => path.endsWith('.js') ? path : `${path}.js`)
   .filter(path => sources.has(path))]));
 

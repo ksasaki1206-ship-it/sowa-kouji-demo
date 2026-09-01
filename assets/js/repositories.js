@@ -1,5 +1,5 @@
-import { PHOTO_GROUPS } from './data.js';
-import { USER_DEFINITIONS } from './auth.js';
+import { PHOTO_GROUPS } from './data.js?v=20260901-16';
+import { USER_DEFINITIONS } from './auth.js?v=20260901-16';
 
 const array = (state, key) => Array.isArray(state?.[key]) ? state[key] : [];
 const matchId = (item, id) => item?.id === id;

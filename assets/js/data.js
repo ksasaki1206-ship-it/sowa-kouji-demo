@@ -1,4 +1,4 @@
-import { USERS } from './auth.js';
+import { USERS } from './auth.js?v=20260901-16';
 
 export const STORAGE_KEY = 'sowa-demo-photo-v1';
 export const STATUSES = ['問い合わせ','現調調整中','現調済','見積中','見積提出','受注','材料手配中','材料納品済','施工予定','施工済','写真登録','完了'];
