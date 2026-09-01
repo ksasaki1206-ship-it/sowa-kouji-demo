@@ -8,6 +8,7 @@ const client = createApiClient({
   baseUrl:'https://api.example.test/',
   timeoutMs:100,
   getAccessToken:async () => 'test-token',
+  getRequestHeaders:async () => ({ 'x-mock-user-id':'nishiyama' }),
   fetchImpl:async (url, options) => {
     calls.push({ url, options });
     return jsonResponse(200, { data:{ ok:true } });
@@ -17,6 +18,7 @@ const success = await client.request('/api/v1/health', { method:'POST', body:{ t
 assert.equal(success.data.ok, true);
 assert.equal(calls[0].url, 'https://api.example.test/api/v1/health');
 assert.equal(calls[0].options.headers.authorization, 'Bearer test-token');
+assert.equal(calls[0].options.headers['x-mock-user-id'], 'nishiyama');
 assert.equal(calls[0].options.body, '{"test":true}');
 
 for (const status of [401,403,409,500]) {

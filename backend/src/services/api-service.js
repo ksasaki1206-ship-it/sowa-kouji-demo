@@ -15,7 +15,7 @@ const expectedVersion = body => {
   return Number(body.version);
 };
 const withoutVersion = body => {
-  const { version:unusedVersion, ...changes } = body || {};
+  const { version:unusedVersion, auditDetail:unusedAuditDetail, ...changes } = body || {};
   return changes;
 };
 
@@ -91,15 +91,16 @@ export function createApiService(provider) {
       const roomId = requiredString(body, 'roomId', 'roomId');
       if (!provider.properties.get(propertyId)) throw validationError('指定された物件が存在しません。', { field:'propertyId' });
       if (!provider.rooms.get(roomId)) throw validationError('指定された部屋が存在しません。', { field:'roomId' });
-      const item = provider.cases.create({ ...body, id:body.id || resourceId('case'), propertyId, roomId, property:requiredString(body, 'property', '物件名'), room:requiredString(body, 'room', '部屋番号'), status:body.status || '問い合わせ', workflowHistory:Array.isArray(body.workflowHistory) ? body.workflowHistory : [], scheduleHistory:Array.isArray(body.scheduleHistory) ? body.scheduleHistory : [], version:1 });
-      writeAudit(user, item, '案件を登録');
+      const { auditDetail:unusedAuditDetail, ...caseBody } = body || {};
+      const item = provider.cases.create({ ...caseBody, id:body.id || resourceId('case'), propertyId, roomId, property:requiredString(body, 'property', '物件名'), room:requiredString(body, 'room', '部屋番号'), status:body.status || '問い合わせ', workflowHistory:Array.isArray(body.workflowHistory) ? body.workflowHistory : [], scheduleHistory:Array.isArray(body.scheduleHistory) ? body.scheduleHistory : [], version:1 });
+      writeAudit(user, item, body.auditDetail || '案件を登録');
       return item;
     },
     updateCase(id, body, user) {
       requireRole(user, 'admin', 'office', 'worker');
       const current = getCase(id, user);
       if (user.role === 'worker') {
-        const allowed = new Set(['version','status','workflowHistory','photoCompletionNote']);
+        const allowed = new Set(['version','status','workflowHistory','photoCompletionNote','note','auditDetail']);
         if (Object.keys(body || {}).some(key => !allowed.has(key))) throw forbiddenError('workerが変更できない案件項目が含まれています。');
       }
       if (user.role === 'office') {
@@ -108,7 +109,7 @@ export function createApiService(provider) {
         if (restoresCancellation || restoresArchive) throw forbiddenError('取消・アーカイブの解除はadminだけが実行できます。');
       }
       const item = provider.cases.update(id, withoutVersion(body), { expectedVersion:expectedVersion(body) });
-      writeAudit(user, item, '案件を更新');
+      writeAudit(user, item, body.auditDetail || '案件を更新');
       return item;
     },
     listMaster(name, user) {
@@ -128,11 +129,15 @@ export function createApiService(provider) {
       if (name === 'properties') requiredString(item, 'name', '物件名');
       if (name === 'rooms') { requiredString(item, 'propertyId', 'propertyId'); requiredString(item, 'roomNumber', '部屋番号'); }
       if (name === 'staff') requiredString(item, 'name', '担当者名');
-      return masterStore(name).create(item);
+      const created = masterStore(name).create(item);
+      writeAudit(user, {}, `${name}マスタを追加`);
+      return created;
     },
     updateMaster(name, id, body, user) {
       requireRole(user, 'admin');
-      return masterStore(name).update(id, withoutVersion(body), { expectedVersion:expectedVersion(body) });
+      const updated = masterStore(name).update(id, withoutVersion(body), { expectedVersion:expectedVersion(body) });
+      writeAudit(user, {}, `${name}マスタを更新`);
+      return updated;
     },
     listResponses(user) {
       requireRole(user, 'admin', 'office');
@@ -165,6 +170,7 @@ export function createApiService(provider) {
       if (body?.source || body?.data || body?.content) throw validationError('第4-Aでは写真本体を受け付けません。metadataのみ指定してください。');
       const group = requiredString(body, 'group', '写真分類');
       if (!['survey','before','during','after'].includes(group)) throw validationError('写真分類が不正です。', { field:'group' });
+      if (provider.photos.list().filter(photo => photo.caseId === caseId && photo.group === group).length >= 8) throw conflictError('写真は分類ごとに8枚までです。');
       const photo = provider.photos.create({ id:body.id || resourceId('photo'), caseId, group, name:body.name || 'photo.jpg', mimeType:body.mimeType || 'image/jpeg', size:Number(body.size || 0), storageProvider:'mock', storageKey:'', version:1 });
       writeAudit(user, item, `${group}写真メタデータを追加`);
       return photo;
@@ -184,12 +190,12 @@ export function createApiService(provider) {
       const { item, publicInfo } = getPublicResidentInfo(token);
       if (!publicInfo.accepting) throw conflictError('この案件の回答受付は終了しています。');
       const response = provider.responses.create({
-        id:resourceId('response'), caseId:item.id, propertyId:item.propertyId, roomId:item.roomId,
+        id:resourceId('response'), caseId:item.id, propertyId:item.propertyId, roomId:item.roomId, property:item.property, room:item.room,
         name:requiredString(body, 'name', 'お名前'), phone:requiredString(body, 'phone', '電話番号'),
         d1:requiredString(body, 'd1', '第1希望日'), t1:String(body.t1 || ''), d2:requiredString(body, 'd2', '第2希望日'), t2:String(body.t2 || ''), note:String(body.note || ''),
-        receivedAt:new Date().toISOString(), applied:false, version:1
+        receivedAt:new Date().toISOString(), applied:true, version:1
       });
-      provider.cases.update(item.id, { residentResponseId:response.id }, { expectedVersion:item.version });
+      provider.cases.update(item.id, { residentResponseId:response.id, residentName:response.name || item.residentName || '' }, { expectedVersion:item.version });
       writeAudit(null, item, '入居者回答を受信');
       return { id:response.id, receivedAt:response.receivedAt, accepted:true };
     }

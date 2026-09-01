@@ -14,7 +14,7 @@ const defaultMessage = status => ({
   500:'サーバーでエラーが発生しました。'
 }[status] || `APIエラーが発生しました。（${status}）`);
 
-export function createApiClient({ baseUrl = '', timeoutMs = 12000, fetchImpl = globalThis.fetch, getAccessToken = async () => '', defaultHeaders = {} } = {}) {
+export function createApiClient({ baseUrl = '', timeoutMs = 12000, fetchImpl = globalThis.fetch, getAccessToken = async () => '', getRequestHeaders = async () => ({}), defaultHeaders = {} } = {}) {
   const normalizedBaseUrl = String(baseUrl).replace(/\/$/, '');
   return Object.freeze({
     baseUrl:normalizedBaseUrl,
@@ -25,8 +25,8 @@ export function createApiClient({ baseUrl = '', timeoutMs = 12000, fetchImpl = g
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const token = await getAccessToken();
-        const requestHeaders = { accept:'application/json', ...defaultHeaders, ...headers };
+        const [token, dynamicHeaders] = await Promise.all([getAccessToken(), getRequestHeaders()]);
+        const requestHeaders = { accept:'application/json', ...defaultHeaders, ...dynamicHeaders, ...headers };
         if (token) requestHeaders.authorization = `Bearer ${token}`;
         if (body !== undefined) requestHeaders['content-type'] = 'application/json';
         const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {

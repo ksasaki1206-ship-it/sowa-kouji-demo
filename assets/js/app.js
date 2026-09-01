@@ -1,15 +1,22 @@
-import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-21';
-import { dataAccess } from './data-access.js?v=20260901-21';
-import { addAudit, auditChanges } from './audit.js?v=20260901-21';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-21';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-21';
-import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-21';
-import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-21';
-import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-21';
-import { createQrSvg } from './qr.js?v=20260901-21';
+import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-22';
+import { dataAccess as dataProvider } from './data-access.js?v=20260901-22';
+import { createApplicationStore } from './application-store.js?v=20260901-22';
+import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
+import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-22';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-22';
+import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-22';
+import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-22';
+import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-22';
+import { createQrSvg } from './qr.js?v=20260901-22';
 
-let state = dataAccess.snapshot.load();
+const dataAccess = createApplicationStore(dataProvider);
+const addAudit = (...args) => dataAccess.isRemote ? null : appendLocalAudit(...args);
+const auditChanges = (...args) => dataAccess.isRemote ? null : appendLocalAuditChanges(...args);
+const loadGate = createRequestGate();
+let state = null;
 let currentCaseId = null;
+let currentView = 'home';
 let noticeTimer = 0;
 let sessionUser = '';
 let sessionUserId = '';
@@ -68,7 +75,7 @@ function propertyReferenceHtml(property) {
   return `<div><span>住所</span><b>${esc(property.address || '未登録')}</b></div><div><span>管理会社／オーナー</span><b>${esc(propertyOwnerSummary(property) || '未登録')}</b></div><div><span>駐車情報</span><b>${esc(property.parkingInfo || '未登録')}</b></div><div><span>アクセス情報</span><b>${esc(property.accessInfo || '未登録')}</b></div>${property.commonNote ? `<div class="property-note"><span>共通備考</span><b>${esc(property.commonNote)}</b></div>` : ''}`;
 }
 
-function populateCasePropertySelect(source) {
+function populateCasePropertySelect(source, fillLegacy = !source.id) {
   const select = $('caseForm').elements.propertyId;
   const selected = propertyById(source.propertyId) || dataAccess.properties.getByName(source.property);
   const candidates = propertyList().filter(item => item.active);
@@ -76,7 +83,7 @@ function populateCasePropertySelect(source) {
   candidates.sort((a,b) => a.name.localeCompare(b.name, 'ja'));
   select.innerHTML = candidates.map(item => `<option value="${esc(item.id)}">${esc(item.name)}${item.active ? '' : '（無効・既存）'}</option>`).join('');
   if (selected && [...select.options].some(option => option.value === selected.id)) select.value = selected.id;
-  updateCasePropertyInfo(!source.id);
+  updateCasePropertyInfo(fillLegacy);
 }
 
 function updateCasePropertyInfo(fillLegacy = false) {
@@ -154,10 +161,40 @@ function lifecycleStatusHtml(c) {
   return `<section class="card detail-card lifecycle-state ${isCancelledCase(c) ? 'cancelled' : ''}"><h2 class="section-title">案件ライフサイクル</h2>${isCancelledCase(c) ? `<div><b>取消済み</b><p>${esc(cancelReasonLabel(c.cancelReasonCategory))}${c.cancelReason ? `／${esc(c.cancelReason)}` : ''}</p><small>${esc(c.cancelledAt ? new Date(c.cancelledAt).toLocaleString('ja-JP') : '日時未登録')} ／ ${esc(c.cancelledBy || '担当未登録')}</small></div>` : ''}${isArchivedCase(c) ? `<div><b>アーカイブ済み</b><p>${esc(c.archiveReason || '理由未登録')}</p><small>${esc(c.archivedAt ? new Date(c.archivedAt).toLocaleString('ja-JP') : '日時未登録')} ／ ${esc(c.archivedBy || '担当未登録')}</small></div>` : ''}</section>`;
 }
 
-function persist(message) {
-  if (!dataAccess.snapshot.save()) return notify('保存容量を超えました。写真を減らしてください。');
+async function persist(message) {
+  if (!await dataAccess.snapshot.save()) return notify('保存容量を超えました。写真を減らしてください。');
   if (message) notify(message);
 }
+
+function showDataSourceStatus(title, message) {
+  $('appRoot').classList.add('hidden');
+  $('loginView').classList.add('hidden');
+  $('residentPublicView').classList.add('hidden');
+  $('dataSourceTitle').textContent = title;
+  $('dataSourceMessage').textContent = message;
+  $('dataSourceView').classList.remove('hidden');
+}
+
+function hideDataSourceStatus() { $('dataSourceView').classList.add('hidden'); }
+
+async function handleDataError(error, { reloadOnConflict = true } = {}) {
+  console.error('データ処理に失敗しました。', error);
+  notify(messageForDataError(error));
+  if (!dataAccess.isRemote || !reloadOnConflict || !(error?.code === 'CONFLICT' || error?.status === 409) || !sessionRole) return;
+  try {
+    const token = loadGate.begin();
+    const latest = await dataAccess.reload({ role:sessionRole, user:sessionUser, userId:sessionUserId });
+    if (!loadGate.isCurrent(token)) return;
+    state = latest;
+    closeCaseModal();
+    if (currentView === 'detail' && currentCaseId && caseById(currentCaseId)) openDetail(currentCaseId);
+    else show(currentView);
+  } catch (reloadError) {
+    console.error('最新情報の再読み込みに失敗しました。', reloadError);
+  }
+}
+
+const runUiAction = action => Promise.resolve().then(action).catch(error => handleDataError(error));
 
 function notify(text) {
   const node = $('notice');
@@ -205,6 +242,7 @@ function ensurePhase2Ui() {
 function show(view) {
   if (sessionRole === 'worker' && !['home','detail','route-error'].includes(view)) view = 'home';
   const effectiveView = view === 'home' && sessionRole === 'worker' ? 'worker' : view;
+  currentView = view;
   ['home','worker','cases','detail','schedule','responses','history','route-error'].forEach(name => $(`view-${name}`).classList.toggle('hidden', name !== effectiveView));
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.view === view || (view === 'detail' && button.dataset.view === (sessionRole === 'worker' ? 'home' : 'cases'))));
   if (effectiveView === 'home') renderHome();
@@ -302,7 +340,7 @@ function answerHtml(c) {
 
 function photoGroupHtml(c, key, label) {
   const photos = dataAccess.photos.list(c.id, key);
-  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb"><img src="${photo.source}" alt="${esc(photo.name || `${label} ${index + 1}`)}"><button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${photo.source}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || 'metadata')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
 }
 
 function caseHistoryHtml(c) {
@@ -328,8 +366,8 @@ function openWorkerDetail(c) {
     <section class="card detail-card"><h2 class="section-title">必要写真</h2><div class="worker-photo-status">${['before','during','after'].map(key => `<span class="${c.photos[key].length ? 'ok' : 'missing'}">${esc(PHOTO_GROUPS[key])} ${c.photos[key].length}枚</span>`).join('')}</div><div class="gallery worker-gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
     ${workAssigned ? '<button id="workerCompleteButton" class="btn primary worker-complete" type="button">作業完了報告</button>' : ''}
     <section class="card detail-card"><h2 class="section-title">工程</h2>${workflowTimelineHtml(c)}</section>`;
-  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => handleFiles(c, input.dataset.key, event.target.files)));
-  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => deletePhoto(c, button.dataset.key, Number(button.dataset.index))));
+  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => runUiAction(() => handleFiles(c, input.dataset.key, event.target.files))));
+  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index)))));
   $('workerCompleteButton')?.addEventListener('click', () => openWorkerCompletion(c));
   show('detail');
 }
@@ -374,12 +412,14 @@ function requestPhotoCheckedAction(c, targetStatus, action) {
   $('photoWarningModal').classList.remove('hidden');
 }
 
-function advanceCase(c, targetStatus) {
+async function advanceCase(c, targetStatus) {
   const old = c.status;
-  dataAccess.cases.update(c.id, { status:targetStatus });
-  recordWorkflowStep(c, targetStatus, sessionUser);
+  const workflowHistory = clone(c.workflowHistory || []);
+  const draft = { ...c, workflowHistory };
+  recordWorkflowStep(draft, targetStatus, sessionUser);
+  await dataAccess.cases.update(c.id, { status:targetStatus, workflowHistory }, { auditDetail:`ステータスを ${old} → ${targetStatus} に変更` });
   addAudit(state, c, `ステータスを ${old} → ${c.status} に変更`);
-  persist(`「${c.status}」へ進めました。`);
+  await persist(`「${c.status}」へ進めました。`);
   openDetail(c.id);
 }
 
@@ -407,7 +447,7 @@ function openLifecycleAction(c, action, type = '') {
   if (!isArchive) form.elements.reasonCategory.focus();
 }
 
-function saveLifecycleAction(event) {
+async function saveLifecycleAction(event) {
   event.preventDefault();
   const context = lifecycleActionContext;
   const c = context ? caseById(context.caseId) : null;
@@ -417,9 +457,11 @@ function saveLifecycleAction(event) {
   const reason = form.elements.reason.value.trim();
   const details = { reasonCategory, reason, changedBy:sessionUser };
   let result;
-  if (context.action === 'postpone') result = dataAccess.lifecycle.postponeSchedule(c.id, context.type, details);
-  if (context.action === 'cancel') result = dataAccess.lifecycle.cancel(c.id, details);
-  if (context.action === 'archive') result = dataAccess.lifecycle.archive(c.id, details);
+  await runWithPending(event.submitter, async () => {
+    if (context.action === 'postpone') result = await dataAccess.lifecycle.postponeSchedule(c.id, context.type, details);
+    if (context.action === 'cancel') result = await dataAccess.lifecycle.cancel(c.id, details);
+    if (context.action === 'archive') result = await dataAccess.lifecycle.archive(c.id, details);
+  }, '処理中…');
   if (!result?.ok) return setFormError('lifecycleActionError', result?.error || '操作できませんでした。');
   if (context.action === 'postpone') {
     const entry = result.entry;
@@ -427,49 +469,49 @@ function saveLifecycleAction(event) {
   }
   if (context.action === 'cancel') addAudit(state, c, `案件を取消（理由：${cancelReasonLabel(reasonCategory)}${reason ? `・${reason}` : ''}）`);
   if (context.action === 'archive') addAudit(state, c, `案件をアーカイブ${reason ? `（理由：${reason}）` : ''}`);
-  persist(context.action === 'postpone' ? `${SCHEDULE_TYPES[context.type]}を延期しました。` : context.action === 'cancel' ? '案件を取消しました。' : '案件をアーカイブしました。');
+  await persist(context.action === 'postpone' ? `${SCHEDULE_TYPES[context.type]}を延期しました。` : context.action === 'cancel' ? '案件を取消しました。' : '案件をアーカイブしました。');
   closeLifecycleAction();
   renderHome();
   renderCases();
   openDetail(c.id);
 }
 
-function restoreCancelled(c) {
+async function restoreCancelled(c) {
   if (!can(sessionRole, 'restoreLifecycle') || !confirm('この案件の取消を解除しますか？')) return;
-  const result = dataAccess.lifecycle.restore(c.id);
+  const result = await dataAccess.lifecycle.restore(c.id);
   if (!result.ok) return notify(result.error);
   addAudit(state, c, '案件の取消を解除');
-  persist('取消を解除しました。');
+  await persist('取消を解除しました。');
   openDetail(c.id);
 }
 
-function restoreArchived(c) {
+async function restoreArchived(c) {
   if (!can(sessionRole, 'restoreLifecycle') || !confirm('この案件のアーカイブを解除しますか？')) return;
-  const result = dataAccess.lifecycle.unarchive(c.id);
+  const result = await dataAccess.lifecycle.unarchive(c.id);
   if (!result.ok) return notify(result.error);
   addAudit(state, c, '案件のアーカイブを解除');
-  persist('アーカイブを解除しました。');
+  await persist('アーカイブを解除しました。');
   openDetail(c.id);
 }
 
 function wireDetail(c) {
-  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => handleFiles(c, input.dataset.key, event.target.files)));
-  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => deletePhoto(c, button.dataset.key, Number(button.dataset.index))));
-  $('advance')?.addEventListener('click', () => {
+  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => runUiAction(() => handleFiles(c, input.dataset.key, event.target.files))));
+  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index)))));
+  $('advance')?.addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, async () => {
     const index = STATUSES.indexOf(c.status);
     if (index < 0 || index >= STATUSES.length - 1) return notify('完了済みです。');
     const targetStatus = STATUSES[index + 1];
-    requestPhotoCheckedAction(c, targetStatus, () => advanceCase(c, targetStatus));
-  });
+    return requestPhotoCheckedAction(c, targetStatus, () => runUiAction(() => advanceCase(c, targetStatus)));
+  }, '保存中…')));
   $('editCase')?.addEventListener('click', () => openCaseModal(c));
   $('viewCaseProperty')?.addEventListener('click', () => openPropertyDetail(c.propertyId));
   $('copyCaseLink')?.addEventListener('click', () => copyText(buildCaseUrl(location.href, c.id), '案件リンクをコピーしました。'));
   $('showResidentQr')?.addEventListener('click', () => openResidentQr(c.id));
   document.querySelectorAll('.postpone-schedule').forEach(button => button.addEventListener('click', () => openLifecycleAction(c, 'postpone', button.dataset.type)));
   $('cancelCase')?.addEventListener('click', () => openLifecycleAction(c, 'cancel'));
-  $('restoreCancelledCase')?.addEventListener('click', () => restoreCancelled(c));
+  $('restoreCancelledCase')?.addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, () => restoreCancelled(c), '処理中…')));
   $('archiveCase')?.addEventListener('click', () => openLifecycleAction(c, 'archive'));
-  $('unarchiveCase')?.addEventListener('click', () => restoreArchived(c));
+  $('unarchiveCase')?.addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, () => restoreArchived(c), '処理中…')));
 }
 
 function compressImage(file) {
@@ -501,23 +543,29 @@ async function handleFiles(c, key, fileList) {
   if (!files.length) return;
   try {
     const images = await Promise.all(files.map(async file => ({ file, source:await compressImage(file) })));
-    const added = images.map(({ file, source }) => dataAccess.photos.create(c.id, { group:key, source, name:file.name || 'photo.jpg', mimeType:'image/jpeg', size:file.size })).filter(Boolean);
+    const added = [];
+    for (const { file, source } of images) {
+      const created = await dataAccess.photos.create(c.id, { group:key, source, name:file.name || 'photo.jpg', mimeType:'image/jpeg', size:file.size });
+      if (created) added.push(created);
+    }
     if (!added.length) return notify('この分類には8枚まで保存できます。');
     addAudit(state, c, `${PHOTO_GROUPS[key]}を${added.length}枚追加`);
     if (key === 'after' && STATUSES.indexOf(c.status) >= STATUSES.indexOf('施工済') && STATUSES.indexOf(c.status) < STATUSES.indexOf('写真登録')) {
-      c.status = '写真登録';
-      recordWorkflowStep(c, '写真登録', sessionUser);
+      const workflowHistory = clone(c.workflowHistory || []);
+      const draft = { ...c, workflowHistory };
+      recordWorkflowStep(draft, '写真登録', sessionUser);
+      await dataAccess.cases.update(c.id, { status:'写真登録', workflowHistory }, { auditDetail:'施工後写真を登録し、写真登録工程へ更新' });
     }
-    persist(`${added.length}枚の写真を追加しました。`);
+    await persist(`${added.length}枚の写真を追加しました。`);
     openDetail(c.id);
-  } catch { notify('写真の読み込みに失敗しました。'); }
+  } catch (error) { await handleDataError(error, { reloadOnConflict:false }); }
 }
 
-function deletePhoto(c, key, index) {
+async function deletePhoto(c, key, index) {
   if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && ownsCase(c)))) return notify('写真を削除する権限がありません。');
-  if (!dataAccess.photos.remove(c.id, key, index)) return notify('写真が見つかりません。');
+  if (!await dataAccess.photos.remove(c.id, key, index)) return notify('写真が見つかりません。');
   addAudit(state, c, `${PHOTO_GROUPS[key]}を1枚削除`);
-  persist('写真を削除しました。');
+  await persist('写真を削除しました。');
   openDetail(c.id);
 }
 
@@ -531,7 +579,7 @@ function openCaseModal(c) {
   const source = c || createCase();
   editingCaseSnapshot = c ? clone(c) : null;
   ['property','room','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
-  populateCasePropertySelect(source);
+  populateCasePropertySelect(source, !c);
   populateCaseRoomSelect(source);
   populateAssignmentSelect(form.elements.surveyStaffId, 'canSurvey', source.surveyStaffId, source.surveyStaff);
   populateAssignmentSelect(form.elements.workStaffId, 'canWork', source.workStaffId, source.workStaff);
@@ -551,7 +599,7 @@ function addScheduleAudit(c, entry) {
   addAudit(state, c, `${label}予定を変更（${fmtDateTime(entry.oldAt)} → ${fmtDateTime(entry.newAt)}／理由：${reason}）`);
 }
 
-function saveCaseForm(event) {
+async function saveCaseForm(event) {
   event.preventDefault();
   if (sessionRole === 'worker' || !can(sessionRole, 'edit')) return notify('この操作を行う権限がありません。');
   const form = event.currentTarget;
@@ -592,24 +640,24 @@ function saveCaseForm(event) {
     if ((changedExisting || rescheduling) && scheduleChanges[type].reasonCategory === 'other' && !scheduleChanges[type].reason.trim()) return notify(`${SCHEDULE_TYPES[type]}予定の変更理由詳細を入力してください。`);
   }
   const proposal = { ...c, ...values };
-  const commit = (ignoredConflicts = [], ignoredDuplicate = false) => {
+  const commit = async (ignoredConflicts = [], ignoredDuplicate = false) => runWithPending(form.querySelector('[type="submit"]'), async () => {
     const before = existing ? clone(existing) : null;
     const caseValues = { ...values };
     delete caseValues.surveyAt;
     delete caseValues.surveyDurationMinutes;
     delete caseValues.workAt;
     delete caseValues.workDurationMinutes;
-    Object.assign(c, caseValues);
     if (!existing) {
+      Object.assign(c, caseValues);
       recordWorkflowStep(c, '問い合わせ', sessionUser);
-      dataAccess.cases.create(c);
-      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey).entry);
-      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work).entry);
+      await dataAccess.cases.create(c, { auditDetail:'案件を新規登録' });
+      addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey)).entry);
+      addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work)).entry);
       addAudit(state, c, '案件を新規登録');
     } else {
-      dataAccess.cases.update(c.id, caseValues);
-      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey).entry);
-      addScheduleAudit(c, dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work).entry);
+      await dataAccess.cases.update(c.id, caseValues, { auditDetail:'案件情報を編集' });
+      addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey)).entry);
+      addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work)).entry);
       auditChanges(state, before, c);
       if (before.roomId !== c.roomId) addAudit(state, c, `部屋マスタ紐付けを ${roomById(before.roomId)?.roomNumber || before.room || '未定'} → ${selectedRoom.roomNumber} に変更`);
     }
@@ -621,12 +669,13 @@ function saveCaseForm(event) {
     recordWorkflowStep(c, c.status, sessionUser);
     if (c.materialOrderedAt) recordWorkflowStep(c, '材料手配中', sessionUser, `${c.materialOrderedAt}T12:00`);
     if (c.materialReceivedAt) recordWorkflowStep(c, '材料納品済', sessionUser, `${c.materialReceivedAt}T12:00`);
-    persist(existing ? '案件を更新しました。' : '案件を登録しました。');
+    await dataAccess.cases.update(c.id, { workflowHistory:clone(c.workflowHistory) }, { auditDetail:existing ? '案件を更新' : '案件を登録' });
+    await persist(existing ? '案件を更新しました。' : '案件を登録しました。');
     closeCaseModal();
     renderCases();
     if (currentCaseId === c.id) openDetail(c.id);
-  };
-  const proceed = (ignoredConflicts, ignoredDuplicate) => existing?.status === values.status ? commit(ignoredConflicts, ignoredDuplicate) : requestPhotoCheckedAction(c, values.status, () => commit(ignoredConflicts, ignoredDuplicate));
+  }, '保存中…');
+  const proceed = (ignoredConflicts, ignoredDuplicate) => existing?.status === values.status ? runUiAction(() => commit(ignoredConflicts, ignoredDuplicate)) : requestPhotoCheckedAction(c, values.status, () => runUiAction(() => commit(ignoredConflicts, ignoredDuplicate)));
   const checkSchedule = ignoredDuplicate => {
     const conflicts = findScheduleConflicts(state, proposal, existing?.id || proposal.id);
     if (conflicts.length) return openConflictWarning(conflicts, () => proceed(conflicts, ignoredDuplicate));
@@ -697,26 +746,30 @@ function openWorkerCompletion(c) {
 
 function closeWorkerCompletion() { $('workerCompleteModal').classList.add('hidden'); }
 
-function completeWorkerCase(c, note) {
-  const old = c.status;
-  if (STATUSES.indexOf(c.status) < STATUSES.indexOf('施工済')) c.status = '施工済';
-  recordWorkflowStep(c, '施工済', sessionUser);
-  if (c.photos.after.length) recordWorkflowStep(c, '写真登録', sessionUser);
-  if (note) c.note = [c.note, `完了報告：${note}`].filter(Boolean).join('／');
-  addAudit(state, c, `作業完了を報告${old !== c.status ? `（ステータス ${old} → ${c.status}）` : ''}`);
-  persist('作業完了を報告しました。');
+async function completeWorkerCase(c, note, control) {
+  await runWithPending(control, async () => {
+    const old = c.status;
+    const draft = clone(c);
+    if (STATUSES.indexOf(draft.status) < STATUSES.indexOf('施工済')) draft.status = '施工済';
+    recordWorkflowStep(draft, '施工済', sessionUser);
+    if (draft.photos.after.length) recordWorkflowStep(draft, '写真登録', sessionUser);
+    if (note) draft.note = [draft.note, `完了報告：${note}`].filter(Boolean).join('／');
+    await dataAccess.cases.update(c.id, { status:draft.status, note:draft.note, workflowHistory:draft.workflowHistory }, { auditDetail:`作業完了を報告${old !== draft.status ? `（ステータス ${old} → ${draft.status}）` : ''}` });
+    addAudit(state, c, `作業完了を報告${old !== c.status ? `（ステータス ${old} → ${c.status}）` : ''}`);
+    await persist('作業完了を報告しました。');
+  }, '送信中…');
   closeWorkerCompletion();
   openDetail(c.id);
 }
 
-function saveWorkerCompletion(event) {
+async function saveWorkerCompletion(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const c = caseById(form.elements.caseId.value);
   if (!c || !form.elements.confirmed.checked) return;
   const note = form.elements.completionNote.value.trim();
-  closeWorkerCompletion();
-  requestPhotoCheckedAction(c, '施工済', () => completeWorkerCase(c, note));
+  const control = form.querySelector('[type="submit"]');
+  requestPhotoCheckedAction(c, '施工済', () => runUiAction(() => completeWorkerCase(c, note, control)));
 }
 
 function monthDays() {
@@ -805,44 +858,60 @@ function renderResponses() {
   wireCaseLinks($('responseList'));
 }
 
-function createResidentResponse(form, fixedCase = null) {
+async function createResidentResponse(form, fixedCase = null, token = '') {
   const data = new FormData(form);
   const property = fixedCase?.property || data.get('property');
   const room = fixedCase?.room || data.get('room');
   const response = { id:`r${Date.now()}`, property, room, propertyId:fixedCase?.propertyId || '', roomId:fixedCase?.roomId || '', name:data.get('name'), phone:data.get('phone'), d1:data.get('d1'), t1:data.get('t1'), d2:data.get('d2'), t2:data.get('t2'), note:data.get('note'), receivedAt:new Date().toISOString(), applied:false, caseId:'' };
+  if (dataAccess.isRemote) {
+    const target = fixedCase || (token ? null : dataAccess.cases.getByPropertyRoom(response.property, response.room));
+    const residentToken = token || target?.residentAccessToken;
+    if (!residentToken) throw new Error('HTTP modeでは対象案件の入居者回答URLから送信してください。');
+    const accepted = await dataAccess.publicResident.createResponse(residentToken, response);
+    if (sessionRole) {
+      state = await dataAccess.reload({ role:sessionRole, user:sessionUser, userId:sessionUserId });
+    }
+    return { response:{ ...response, ...accepted }, caseItem:target };
+  }
   const c = fixedCase || dataAccess.cases.getByPropertyRoom(response.property, response.room);
   if (c) {
     response.applied = true;
     response.caseId = c.id;
     response.propertyId = c.propertyId || response.propertyId;
     response.roomId = c.roomId || response.roomId;
-    dataAccess.cases.update(c.id, { residentResponseId:response.id, residentName:response.name || c.residentName, note:c.note.replace('／入居者回答待ち','').replace('入居者回答待ち','').trim() });
+    await dataAccess.cases.update(c.id, { residentResponseId:response.id, residentName:response.name || c.residentName, note:c.note.replace('／入居者回答待ち','').replace('入居者回答待ち','').trim() });
     addAudit(state, c, '入居者回答を受信し、希望日時を案件へ反映', '入居者');
   } else {
     addAudit(state, { property:response.property, room:response.room }, '入居者回答を受信（対象案件なし）', '入居者');
   }
-  dataAccess.responses.create(response);
-  persist(c ? '回答を受け付け、案件へ反映しました。' : '回答を受け付けました。対象案件は未登録です。');
+  await dataAccess.responses.create(response);
+  await persist(c ? '回答を受け付け、案件へ反映しました。' : '回答を受け付けました。対象案件は未登録です。');
   return { response, caseItem:c };
 }
 
-function saveResidentResponse(event) {
+async function saveResidentResponse(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  createResidentResponse(form);
-  form.reset();
-  form.elements.property.value = '○○マンション';
-  form.elements.room.value = '102号室';
-  setDefaultResponseDates();
-  setResponseMode('list');
+  await runUiAction(() => runWithPending(form.querySelector('[type="submit"]'), async () => {
+    await createResidentResponse(form);
+    form.reset();
+    form.elements.property.value = '○○マンション';
+    form.elements.room.value = '102号室';
+    setDefaultResponseDates();
+    setResponseMode('list');
+  }, '送信中…'));
 }
 
-function savePublicResidentResponse(event) {
+async function savePublicResidentResponse(event) {
   event.preventDefault();
-  if (!residentRouteCase || residentAccessStatus(residentRouteCase).status !== 'open') return showResidentRoute(pendingRoute.residentToken);
-  createResidentResponse(event.currentTarget, residentRouteCase);
-  $('residentPublicFormPanel').classList.add('hidden');
-  $('residentPublicComplete').classList.remove('hidden');
+  const form = event.currentTarget;
+  const open = dataAccess.isRemote ? residentRouteCase?.accepting : residentAccessStatus(residentRouteCase).status === 'open';
+  if (!residentRouteCase || !open) return showResidentRoute(pendingRoute.residentToken);
+  await runUiAction(() => runWithPending(form.querySelector('[type="submit"]'), async () => {
+    await createResidentResponse(form, dataAccess.isRemote ? null : residentRouteCase, pendingRoute.residentToken);
+    $('residentPublicFormPanel').classList.add('hidden');
+    $('residentPublicComplete').classList.remove('hidden');
+  }, '送信中…'));
 }
 
 function renderHistory() {
@@ -868,6 +937,7 @@ function showLogin() {
   sessionRole = '';
   $('appRoot').classList.add('hidden');
   $('residentPublicView').classList.add('hidden');
+  hideDataSourceStatus();
   $('loginView').classList.remove('hidden');
   $('loginPassword').value = '';
   setFormError('loginError', '');
@@ -925,29 +995,29 @@ function currentResidentQrCase() {
   return dataAccess.cases.get($('residentQrModal').dataset.caseId);
 }
 
-function toggleResidentAccess() {
+async function toggleResidentAccess() {
   if (!can(sessionRole, 'manageResidentAccess')) return notify('この操作を行う権限がありません。');
   const item = currentResidentQrCase();
   if (!item) return closeResidentQr();
   const enabled = item.residentAccessEnabled === false;
-  dataAccess.residentAccess.setEnabled(item.id, enabled);
+  await dataAccess.residentAccess.setEnabled(item.id, enabled);
   addAudit(state, item, enabled ? '入居者回答ページの受付を再開' : '入居者回答ページの受付を停止');
-  persist(enabled ? '入居者回答の受付を再開しました。' : '入居者回答の受付を停止しました。');
+  await persist(enabled ? '入居者回答の受付を再開しました。' : '入居者回答の受付を停止しました。');
   openResidentQr(item.id);
 }
 
-function regenerateResidentAccess() {
+async function regenerateResidentAccess() {
   if (!can(sessionRole, 'regenerateResidentAccess')) return notify('この操作を行う権限がありません。');
   const item = currentResidentQrCase();
   if (!item) return closeResidentQr();
   if (!confirm('QRを再発行すると、これまでの入居者回答URLは利用できなくなります。再発行しますか？')) return;
   let updated = null;
   for (let attempt = 0; attempt < 5 && !updated; attempt += 1) {
-    updated = dataAccess.residentAccess.regenerate(item.id, generateResidentAccessToken());
+    updated = await dataAccess.residentAccess.regenerate(item.id, generateResidentAccessToken());
   }
   if (!updated) return notify('QRを再発行できませんでした。もう一度お試しください。');
   addAudit(state, updated, '入居者回答ページのQRを再発行');
-  persist('入居者用QRを再発行しました。');
+  await persist('入居者用QRを再発行しました。');
   openResidentQr(updated.id);
 }
 
@@ -971,9 +1041,23 @@ function goHomeFromRoute() {
   show('home');
 }
 
-function showResidentRoute(token) {
-  residentRouteCase = dataAccess.residentAccess.getByToken(token);
-  const access = residentAccessStatus(residentRouteCase);
+async function showResidentRoute(token) {
+  try {
+    if (dataAccess.isRemote) {
+      showDataSourceStatus('回答ページを読み込んでいます', 'サーバーから受付状況を確認しています。');
+      residentRouteCase = await dataAccess.publicResident.get(token);
+    } else {
+      if (!state) state = await dataAccess.snapshot.load();
+      residentRouteCase = dataAccess.residentAccess.getByToken(token);
+    }
+  } catch (error) {
+    residentRouteCase = null;
+    console.error('入居者回答ページを読み込めませんでした。', error);
+  }
+  const access = dataAccess.isRemote
+    ? { status:residentRouteCase?.accepting ? 'open' : residentRouteCase?.closed ? 'closed' : 'unavailable', message:residentRouteCase?.closed ? 'この案件の回答受付は終了しています。' : residentRouteCase ? '現在、回答受付を停止しています。' : '回答ページを読み込めませんでした。通信状態を確認してください。' }
+    : residentAccessStatus(residentRouteCase);
+  hideDataSourceStatus();
   $('loginView').classList.add('hidden');
   $('appRoot').classList.add('hidden');
   $('residentPublicView').classList.remove('hidden');
@@ -986,8 +1070,8 @@ function showResidentRoute(token) {
     $('residentPublicRoom').textContent = '';
     return;
   }
-  $('residentPublicProperty').textContent = residentRouteCase.property;
-  $('residentPublicRoom').textContent = residentRouteCase.room;
+  $('residentPublicProperty').textContent = dataAccess.isRemote ? residentRouteCase.propertyName : residentRouteCase.property;
+  $('residentPublicRoom').textContent = dataAccess.isRemote ? residentRouteCase.roomName : residentRouteCase.room;
   const form = $('residentPublicForm');
   form.reset();
   form.elements.d1.value = plusDays(2);
@@ -1057,37 +1141,52 @@ function updateRoleUi(role) {
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('role-hidden', worker && button.dataset.view !== 'home'));
   $('back').textContent = worker ? '← 今日の現場' : '← 案件一覧';
   $('newCase').classList.toggle('role-hidden', worker);
-  $('resetDemo').classList.toggle('role-hidden', worker);
+  $('resetDemo').classList.toggle('role-hidden', worker || dataAccess.isRemote);
 }
 
-function activateSession(session) {
+async function activateSession(session) {
   if (!session || !USERS.includes(session.user)) return showLogin();
   sessionUser = session.user;
   sessionUserId = session.userId;
   sessionRole = session.role;
+  showDataSourceStatus('データを読み込んでいます', dataAccess.isRemote ? '共有APIから最新情報を取得しています。' : '端末内のデモデータを準備しています。');
+  const token = loadGate.begin();
+  try {
+    const loaded = await dataAccess.snapshot.load({ role:sessionRole, user:sessionUser, userId:sessionUserId });
+    if (!loadGate.isCurrent(token)) return false;
+    state = loaded;
+  } catch (error) {
+    console.error('データの読み込みに失敗しました。', error);
+    showDataSourceStatus('データを読み込めません', `${messageForDataError(error)} HTTPモードから端末データへ自動切替は行いません。`);
+    return false;
+  }
   state.currentUser = session.user;
-  dataAccess.snapshot.save();
+  await dataAccess.snapshot.save();
   $('loggedInUser').textContent = session.user;
   $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
   $('staffAdminButton').classList.toggle('hidden', !can(session.role, 'manageStaff'));
   $('propertyButton').classList.toggle('hidden', session.role === 'worker');
   $('propertyButton').textContent = can(session.role, 'manageProperties') ? '物件管理' : '物件情報';
   updateRoleUi(session.role);
+  hideDataSourceStatus();
   $('loginView').classList.add('hidden');
   $('appRoot').classList.remove('hidden');
   show('home');
   applyPendingCaseRoute();
+  return true;
 }
 
 async function handleLogin(event) {
   event.preventDefault();
-  const session = await authenticate($('loginUser').value, $('loginPassword').value);
-  if (!session) return setFormError('loginError', 'ユーザーまたはパスワードが正しくありません');
-  setFormError('loginError', '');
-  state.currentUser = session.user;
-  addAudit(state, {}, 'ログイン', session.user);
-  persist();
-  activateSession(session);
+  const form = event.currentTarget;
+  await runWithPending(form.querySelector('[type="submit"]'), async () => {
+    const session = await authenticate($('loginUser').value, $('loginPassword').value);
+    if (!session) return setFormError('loginError', 'ユーザーまたはパスワードが正しくありません');
+    setFormError('loginError', '');
+    if (!await activateSession(session)) return;
+    addAudit(state, {}, 'ログイン', session.user);
+    await persist();
+  }, 'ログイン中…');
 }
 
 function openPasswordModal() {
@@ -1102,26 +1201,28 @@ function closePasswordModal() { $('passwordModal').classList.add('hidden'); }
 async function saveOwnPassword(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const currentPassword = form.elements.currentPassword.value;
-  const newPassword = form.elements.newPassword.value;
-  if (newPassword !== form.elements.confirmPassword.value) return setFormError('passwordError', '新しいパスワードが一致しません。');
-  const result = await changeOwnPassword(sessionUser, currentPassword, newPassword);
-  if (!result.ok) return setFormError('passwordError', result.error);
-  addAudit(state, {}, '自分のパスワードを変更');
-  persist('パスワードを変更しました。');
-  closePasswordModal();
+  await runWithPending(form.querySelector('[type="submit"]'), async () => {
+    const currentPassword = form.elements.currentPassword.value;
+    const newPassword = form.elements.newPassword.value;
+    if (newPassword !== form.elements.confirmPassword.value) return setFormError('passwordError', '新しいパスワードが一致しません。');
+    const result = await changeOwnPassword(sessionUser, currentPassword, newPassword);
+    if (!result.ok) return setFormError('passwordError', result.error);
+    addAudit(state, {}, '自分のパスワードを変更');
+    await persist('パスワードを変更しました。');
+    closePasswordModal();
+  }, '変更中…');
 }
 
 function renderUserAdmin() {
   $('userAdminList').innerHTML = dataAccess.users.list().map(user => `<div class="user-admin-row"><div><b>${esc(user.name)}</b><span class="muted">${esc(ROLE_DEFINITIONS[user.role]?.label || user.role)}</span></div><button class="btn reset-password" type="button" data-user="${esc(user.name)}">パスワードをリセット</button></div>`).join('');
-  $('userAdminList').querySelectorAll('.reset-password').forEach(button => button.addEventListener('click', async () => {
+  $('userAdminList').querySelectorAll('.reset-password').forEach(button => button.addEventListener('click', () => runUiAction(() => runWithPending(button, async () => {
     const target = button.dataset.user;
     if (!confirm(`${target}のパスワードを初期値へ戻しますか？`)) return;
     const result = await resetUserPassword(sessionRole, target);
     if (!result.ok) return notify(result.error);
     addAudit(state, {}, `${target}のパスワードをリセット`);
-    persist(`${target}のパスワードをリセットしました。`);
-  }));
+    await persist(`${target}のパスワードをリセットしました。`);
+  }, 'リセット中…'))));
 }
 
 function openUserAdmin() {
@@ -1159,20 +1260,20 @@ function renderStaffAdmin() {
     form.elements.active.checked = person.active;
     form.elements.name.focus();
   }));
-  $('staffAdminList').querySelectorAll('.toggle-staff').forEach(button => button.addEventListener('click', () => {
+  $('staffAdminList').querySelectorAll('.toggle-staff').forEach(button => button.addEventListener('click', () => runUiAction(async () => {
     if (!can(sessionRole, 'manageStaff')) return;
     const person = dataAccess.staff.get(button.dataset.id);
     if (!person || !confirm(`${person.name}を${person.active ? '無効化' : '有効化'}しますか？`)) return;
     const active = !person.active;
-    dataAccess.staff.update(person.id, { active });
+    await dataAccess.staff.update(person.id, { active });
     addAudit(state, {}, `担当者「${person.name}」を${active ? '有効化' : '無効化'}`);
-    persist(`担当者を${active ? '有効化' : '無効化'}しました。`);
+    await persist(`担当者を${active ? '有効化' : '無効化'}しました。`);
     resetStaffForm();
     renderStaffAdmin();
-  }));
+  })));
 }
 
-function saveStaff(event) {
+async function saveStaff(event) {
   event.preventDefault();
   if (!can(sessionRole, 'manageStaff')) return notify('この操作を行う権限がありません。');
   const form = event.currentTarget;
@@ -1190,14 +1291,17 @@ function saveStaff(event) {
   if (staffList().some(person => person.id !== id && person.name === values.name)) return setFormError('staffFormError', '同じ表示名の担当者が存在します。');
   if (values.loginUserId && staffList().some(person => person.id !== id && person.loginUserId === values.loginUserId)) return setFormError('staffFormError', 'このログインユーザーは別の担当者に紐付いています。');
   setFormError('staffFormError', '');
+  await runUiAction(() => runWithPending(form.querySelector('[type="submit"]'), async () => {
   if (existing) {
     const before = clone(existing);
     const oldName = existing.name;
-    dataAccess.staff.update(existing.id, values);
-    if (oldName !== values.name) dataAccess.cases.list().forEach(item => {
-      if (item.surveyStaffId === existing.id) item.surveyStaff = values.name;
-      if (item.workStaffId === existing.id) item.workStaff = values.name;
-    });
+    await dataAccess.staff.update(existing.id, values);
+    if (oldName !== values.name) for (const item of dataAccess.cases.list()) {
+      const changes = {};
+      if (item.surveyStaffId === existing.id) changes.surveyStaff = values.name;
+      if (item.workStaffId === existing.id) changes.workStaff = values.name;
+      if (Object.keys(changes).length) await dataAccess.cases.update(item.id, changes, { auditDetail:'担当者表示名の変更を案件へ反映' });
+    }
     const changes = [
       oldName !== values.name ? `表示名：${oldName} → ${values.name}` : '',
       before.type !== values.type ? `種別：${STAFF_TYPES[before.type] || before.type} → ${STAFF_TYPES[values.type] || values.type}` : '',
@@ -1209,12 +1313,13 @@ function saveStaff(event) {
     addAudit(state, {}, `担当者「${oldName}」を編集${changes.length ? `（${changes.join('、')}）` : ''}`);
   } else {
     const person = { id:`staff-${Date.now()}-${Math.random().toString(16).slice(2)}`, ...values };
-    dataAccess.staff.create(person);
+    await dataAccess.staff.create(person);
     addAudit(state, {}, `担当者「${person.name}」を追加`);
   }
-  persist(existing ? '担当者を更新しました。' : '担当者を追加しました。');
+  await persist(existing ? '担当者を更新しました。' : '担当者を追加しました。');
   resetStaffForm();
   renderStaffAdmin();
+  }, '保存中…'));
 }
 
 function openStaffAdmin() {
@@ -1254,20 +1359,20 @@ function renderPropertyAdmin() {
     form.elements.active.checked = property.active;
     form.elements.name.focus();
   }));
-  $('propertyAdminList').querySelectorAll('.toggle-property').forEach(button => button.addEventListener('click', () => {
+  $('propertyAdminList').querySelectorAll('.toggle-property').forEach(button => button.addEventListener('click', () => runUiAction(async () => {
     if (!can(sessionRole, 'manageProperties')) return;
     const property = propertyById(button.dataset.id);
     if (!property || !confirm(`${property.name}を${property.active ? '無効化' : '有効化'}しますか？`)) return;
     const active = !property.active;
-    dataAccess.properties.update(property.id, { active, updatedAt:new Date().toISOString() });
+    await dataAccess.properties.update(property.id, { active, updatedAt:new Date().toISOString() });
     addAudit(state, { property:property.name }, `物件「${property.name}」を${active ? '有効化' : '無効化'}`);
-    persist(`物件を${active ? '有効化' : '無効化'}しました。`);
+    await persist(`物件を${active ? '有効化' : '無効化'}しました。`);
     resetPropertyForm();
     renderPropertyAdmin();
-  }));
+  })));
 }
 
-function saveProperty(event) {
+async function saveProperty(event) {
   event.preventDefault();
   if (!can(sessionRole, 'manageProperties')) return notify('この操作を行う権限がありません。');
   const form = event.currentTarget;
@@ -1280,30 +1385,32 @@ function saveProperty(event) {
   if (duplicate) return setFormError('propertyFormError', '同じ物件名が存在します。');
   setFormError('propertyFormError', '');
   const now = new Date().toISOString();
+  await runUiAction(() => runWithPending(form.querySelector('[type="submit"]'), async () => {
   if (existing) {
     const before = clone(existing);
-    dataAccess.properties.update(existing.id, { ...values, updatedAt:now });
+    await dataAccess.properties.update(existing.id, { ...values, updatedAt:now });
     if (before.name !== values.name) {
       const linkedCaseIds = new Set();
-      dataAccess.cases.list().forEach(item => {
-        if (item.propertyId !== existing.id) return;
-        dataAccess.cases.update(item.id, { property:values.name });
+      for (const item of dataAccess.cases.list()) {
+        if (item.propertyId !== existing.id) continue;
+        await dataAccess.cases.update(item.id, { property:values.name }, { auditDetail:'物件名変更を案件へ反映' });
         linkedCaseIds.add(item.id);
-      });
-      dataAccess.responses.list().forEach(response => { if (linkedCaseIds.has(response.caseId)) dataAccess.responses.update(response.id, { property:values.name }); });
+      }
+      if (!dataAccess.isRemote) for (const response of dataAccess.responses.list()) if (linkedCaseIds.has(response.caseId)) await dataAccess.responses.update(response.id, { property:values.name });
     }
     const changes = Object.keys(PROPERTY_FIELD_LABELS).filter(key => String(before[key] || '') !== String(values[key] || '')).map(key => `${PROPERTY_FIELD_LABELS[key]}を変更`);
     addAudit(state, { property:values.name }, `物件「${values.name}」を編集${changes.length ? `（${changes.join('、')}）` : ''}`);
     if (before.active !== values.active) addAudit(state, { property:values.name }, `物件「${values.name}」を${values.active ? '有効化' : '無効化'}`);
   } else {
     const property = { ...createProperty(), ...values, createdAt:now, updatedAt:now };
-    if (!dataAccess.properties.create(property)) return setFormError('propertyFormError', '物件を追加できませんでした。');
+    if (!await dataAccess.properties.create(property)) return setFormError('propertyFormError', '物件を追加できませんでした。');
     addAudit(state, { property:property.name }, `物件「${property.name}」を追加`);
   }
-  persist(existing ? '物件を更新しました。' : '物件を追加しました。');
+  await persist(existing ? '物件を更新しました。' : '物件を追加しました。');
   resetPropertyForm();
   renderPropertyAdmin();
   renderSchedule();
+  }, '保存中…'));
 }
 
 function openPropertyAdmin() {
@@ -1339,7 +1446,7 @@ function openPropertyDetail(id) {
     roomEditor.elements.active.checked = true;
     setFormError('roomFormError', '');
   };
-  roomEditor?.addEventListener('submit', event => {
+  roomEditor?.addEventListener('submit', async event => {
     event.preventDefault();
     if (!can(sessionRole, 'manageRooms')) return notify('この操作を行う権限がありません。');
     const roomId = roomEditor.elements.id.value;
@@ -1351,19 +1458,21 @@ function openPropertyDetail(id) {
     if (duplicate) return setFormError('roomFormError', `「${duplicate.roomNumber}」と同じ部屋として登録済みです。`);
     const now = new Date().toISOString();
     const changes = { roomNumber, normalizedRoomNumber, commonNote:roomEditor.elements.commonNote.value.trim(), active:roomEditor.elements.active.checked, updatedAt:now };
+    await runUiAction(() => runWithPending(roomEditor.querySelector('[type="submit"]'), async () => {
     if (existing) {
       const before = clone(existing);
-      if (!dataAccess.rooms.update(existing.id, changes)) return setFormError('roomFormError', '部屋を更新できませんでした。');
+      if (!await dataAccess.rooms.update(existing.id, changes)) return setFormError('roomFormError', '部屋を更新できませんでした。');
       const edited = before.roomNumber !== roomNumber || before.commonNote !== changes.commonNote;
       if (edited) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${before.roomNumber}」を編集`);
       if (before.active !== changes.active) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を${changes.active ? '有効化' : '無効化'}`);
     } else {
       const room = { ...createRoom(property.id), ...changes, propertyId:property.id, createdAt:now };
-      if (!dataAccess.rooms.create(room)) return setFormError('roomFormError', '部屋を追加できませんでした。');
+      if (!await dataAccess.rooms.create(room)) return setFormError('roomFormError', '部屋を追加できませんでした。');
       addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を追加`);
     }
-    persist(existing ? '部屋を更新しました。' : '部屋を追加しました。');
+    await persist(existing ? '部屋を更新しました。' : '部屋を追加しました。');
     openPropertyDetail(property.id);
+    }, '保存中…'));
   });
   $('clearRoomForm')?.addEventListener('click', resetRoomEditor);
   $('propertyDetailContent').querySelectorAll('.edit-room').forEach(button => button.addEventListener('click', () => {
@@ -1375,16 +1484,16 @@ function openPropertyDetail(id) {
     roomEditor.elements.active.checked = room.active;
     roomEditor.elements.roomNumber.focus();
   }));
-  $('propertyDetailContent').querySelectorAll('.toggle-room').forEach(button => button.addEventListener('click', () => {
+  $('propertyDetailContent').querySelectorAll('.toggle-room').forEach(button => button.addEventListener('click', () => runUiAction(async () => {
     if (!can(sessionRole, 'manageRooms')) return;
     const room = roomById(button.dataset.id);
     if (!room || !confirm(`${room.roomNumber}を${room.active ? '無効化' : '有効化'}しますか？`)) return;
     const active = !room.active;
-    dataAccess.rooms.update(room.id, { active, updatedAt:new Date().toISOString() });
+    await dataAccess.rooms.update(room.id, { active, updatedAt:new Date().toISOString() });
     addAudit(state, { property:property.name, room:room.roomNumber }, `部屋「${room.roomNumber}」を${active ? '有効化' : '無効化'}`);
-    persist(`部屋を${active ? '有効化' : '無効化'}しました。`);
+    await persist(`部屋を${active ? '有効化' : '無効化'}しました。`);
     openPropertyDetail(property.id);
-  }));
+  })));
   $('propertyDetailContent').querySelectorAll('.property-case-link').forEach(button => button.addEventListener('click', () => {
     $('propertyDetailModal').classList.add('hidden');
     closePropertyAdmin();
@@ -1398,12 +1507,12 @@ function closePropertyDetail() { $('propertyDetailModal').classList.add('hidden'
 async function init() {
   await ensureCredentials();
   ensurePhase2Ui();
+  if (dataAccess.isRemote) document.querySelector('.foot').textContent = '※開発用HTTPモードです。写真はメタデータのみ扱い、Backend再起動でデータは消去されます。';
   populateSelect($('loginUser'), USERS);
   populateSelect($('statusSelect'), STATUSES);
   setDefaultResponseDates();
-  persist();
   $('loginForm').addEventListener('submit', handleLogin);
-  $('logoutButton').addEventListener('click', () => { addAudit(state, {}, 'ログアウト'); persist(); clearSession(); showLogin(); });
+  $('logoutButton').addEventListener('click', () => runUiAction(async () => { addAudit(state, {}, 'ログアウト'); await persist(); loadGate.invalidate(); clearSession(); showLogin(); }));
   $('passwordButton').addEventListener('click', openPasswordModal);
   $('closePasswordModal').addEventListener('click', closePasswordModal);
   $('passwordModal').addEventListener('click', event => { if (event.target === $('passwordModal')) closePasswordModal(); });
@@ -1426,7 +1535,7 @@ async function init() {
   $('caseForm').elements.propertyId.addEventListener('change', () => { updateCasePropertyInfo(true); populateCaseRoomSelect({}); });
   $('caseForm').elements.roomId.addEventListener('change', updateCaseRoom);
   $('newPropertyFromCase').addEventListener('click', () => { closeCaseModal(); openPropertyAdmin(); });
-  $('newRoomFromCase').addEventListener('click', () => {
+  $('newRoomFromCase').addEventListener('click', () => runUiAction(async () => {
     const propertyId = $('caseForm').elements.propertyId.value;
     const property = propertyById(propertyId);
     if (!property || !can(sessionRole, 'manageRooms')) return notify('物件を選択してください。');
@@ -1442,11 +1551,11 @@ async function init() {
     }
     const now = new Date().toISOString();
     const room = { ...createRoom(property.id), roomNumber, normalizedRoomNumber, propertyId:property.id, active:true, commonNote:'', createdAt:now, updatedAt:now };
-    if (!dataAccess.rooms.create(room)) return notify('部屋を追加できませんでした。');
+    if (!await dataAccess.rooms.create(room)) return notify('部屋を追加できませんでした。');
     addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を案件登録画面から追加`);
-    persist('部屋を追加しました。');
+    await persist('部屋を追加しました。');
     populateCaseRoomSelect({ roomId:room.id, room:room.roomNumber });
-  });
+  }));
   $('duplicateCaseReview').addEventListener('click', reviewDuplicateCase);
   $('duplicateCaseProceed').addEventListener('click', () => {
     const proceed = pendingDuplicateAction?.proceed;
@@ -1475,7 +1584,7 @@ async function init() {
   $('photoWarningProceed').addEventListener('click', () => {
     const action = pendingPhotoAction?.action;
     closePhotoWarning();
-    action?.();
+    runUiAction(() => action?.());
   });
   $('photoWarningCancel').addEventListener('click', closePhotoWarning);
   $('closeWorkerComplete').addEventListener('click', closeWorkerCompletion);
@@ -1497,7 +1606,7 @@ async function init() {
   $('pastCaseFilter').addEventListener('change', renderCases);
   $('closeLifecycleAction').addEventListener('click', closeLifecycleAction);
   $('lifecycleActionModal').addEventListener('click', event => { if (event.target === $('lifecycleActionModal')) closeLifecycleAction(); });
-  $('lifecycleActionForm').addEventListener('submit', saveLifecycleAction);
+  $('lifecycleActionForm').addEventListener('submit', event => { event.preventDefault(); runUiAction(() => saveLifecycleAction(event)); });
   $('residentForm').addEventListener('submit', saveResidentResponse);
   $('residentPublicForm').addEventListener('submit', savePublicResidentResponse);
   $('routeErrorHome').addEventListener('click', goHomeFromRoute);
@@ -1508,8 +1617,8 @@ async function init() {
     const item = currentResidentQrCase();
     if (item) copyText(residentGuide(item, $('residentQrUrl').value), '入居者向け案内文をコピーしました。');
   });
-  $('toggleResidentAccess').addEventListener('click', toggleResidentAccess);
-  $('regenerateResidentAccess').addEventListener('click', regenerateResidentAccess);
+  $('toggleResidentAccess').addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, toggleResidentAccess, '保存中…')));
+  $('regenerateResidentAccess').addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, regenerateResidentAccess, '再発行中…')));
   $('scheduleProperty').addEventListener('change', renderSchedule);
   document.querySelectorAll('[data-schedule-mode]').forEach(button => button.addEventListener('click', () => setScheduleMode(button.dataset.scheduleMode)));
   $('scheduleStaff').addEventListener('change', renderStaffSchedule);
@@ -1521,11 +1630,12 @@ async function init() {
     if (location.hash.startsWith('#case-')) openDetail(decodeURIComponent(location.hash.slice(6)));
   });
   $('resetDemo').addEventListener('click', async () => {
+    if (dataAccess.isRemote) return notify('HTTPモードではデモ初期化を利用できません。');
     if (!confirm('デモ内容と写真、変更履歴を初期状態に戻しますか？')) return;
-    state = dataAccess.snapshot.reset();
+    state = await dataAccess.snapshot.reset();
     await resetAllPasswords();
     state.currentUser = sessionUser;
-    dataAccess.snapshot.save();
+    await dataAccess.snapshot.save();
     $('search').value = '';
     $('filter').innerHTML = '';
     $('casePreset').value = 'all';
@@ -1536,9 +1646,9 @@ async function init() {
     renderCases(); renderHome();
     notify('初期状態に戻しました。');
   });
-  if (pendingRoute.type === ROUTE_TYPES.resident) return showResidentRoute(pendingRoute.residentToken);
+  if (pendingRoute.type === ROUTE_TYPES.resident) return await showResidentRoute(pendingRoute.residentToken);
   const session = getSession();
-  session && USERS.includes(session.user) ? activateSession(session) : showLogin();
+  session && USERS.includes(session.user) ? await activateSession(session) : showLogin();
 }
 
 init().catch(error => { console.error('アプリの初期化に失敗しました。', error); showLogin(); });

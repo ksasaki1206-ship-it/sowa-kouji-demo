@@ -2,6 +2,8 @@ import { forbiddenError, unauthorizedError } from './errors.js';
 
 export const MOCK_USERS = Object.freeze({
   nishiyama:{ id:'nishiyama', name:'西山さん', role:'admin' },
+  takahashi:{ id:'takahashi', name:'高橋さん', role:'admin' },
+  hajime:{ id:'hajime', name:'一さん', role:'admin' },
   office:{ id:'office', name:'事務所', role:'office' },
   'worker-a':{ id:'worker-a', name:'職人A', role:'worker' }
 });

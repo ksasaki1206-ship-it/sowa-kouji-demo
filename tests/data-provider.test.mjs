@@ -22,7 +22,11 @@ const defaults = readDataSourceConfig(undefined);
 assert.equal(defaults.mode, 'local');
 assert.equal(defaults.timeoutMs, 12000);
 const httpConfig = readDataSourceConfig(documentStub({ 'sowa-data-source':'http', 'sowa-api-base-url':'https://api.example.test/', 'sowa-api-timeout-ms':'15000' }));
-assert.deepEqual(httpConfig, { mode:'http', apiBaseUrl:'https://api.example.test', timeoutMs:15000 });
+assert.deepEqual(httpConfig, { mode:'http', apiBaseUrl:'https://api.example.test', apiAuthMode:'none', timeoutMs:15000 });
+const localOverride = readDataSourceConfig(documentStub({ 'sowa-data-source':'local' }), { hostname:'127.0.0.1', search:'?dataSource=http&apiBaseUrl=http%3A%2F%2F127.0.0.1%3A8080&apiAuth=mock' });
+assert.deepEqual(localOverride, { mode:'http', apiBaseUrl:'http://127.0.0.1:8080', apiAuthMode:'mock', timeoutMs:12000 });
+const ignoredRemoteOverride = readDataSourceConfig(documentStub({ 'sowa-data-source':'local' }), { hostname:'ksasaki1206-ship-it.github.io', search:'?dataSource=http&apiBaseUrl=https%3A%2F%2Funtrusted.invalid' });
+assert.deepEqual(ignoredRemoteOverride, { mode:'local', apiBaseUrl:'', apiAuthMode:'none', timeoutMs:12000 });
 assert.throws(() => readDataSourceConfig(documentStub({ 'sowa-data-source':'unknown' })), /未対応/);
 
 let httpCalled = false;

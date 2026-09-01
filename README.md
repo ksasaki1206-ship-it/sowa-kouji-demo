@@ -13,7 +13,9 @@
 - `assets/js/data-access.js`: local / HTTP providerを選択するデータアクセス窓口
 - `assets/js/local-data-provider.js`: 既存の同期localStorage data provider
 - `assets/js/http-data-provider.js`: 将来の共有API向け非同期data provider
+- `assets/js/application-store.js`: providerの非同期取得を画面用stateへhydrateし、local / HTTPの呼出方法を統一
 - `assets/js/api-client.js`: base URL、JSON、timeout、HTTP共通エラー変換
+- `assets/js/async-ui.js`: 通信中の二重操作防止、request世代管理、HTTPエラー表示
 - `assets/js/data-source-config.js`: 公開feature flagとAPI接続先設定
 - `assets/js/bootstrap.js`: local画面起動またはHTTP接続状態表示
 - `assets/js/audit.js`: 操作履歴と案件編集時の差分記録
@@ -147,6 +149,19 @@ HTTP providerはPromiseベースです。第4-AではAPI client、provider契約
 第4-Aのmemory providerはAPI契約確認専用で、再起動時に消え、複数端末・複数インスタンス間の永続共有はできません。Frontend localStorageとの自動同期も行いません。API詳細、Docker、mock auth、Secret方針は `backend/README.md` と `backend/openapi.yaml` を参照してください。
 
 Google Sheets / Drive SDK、APIキー、サービスアカウント鍵、Google認証、Cloud Run deployは今回追加していません。本番ではCloud Run service identityへ最小権限を付与し、必要な秘密情報だけをSecret Managerで管理します。秘密情報をGitHub Pagesへ渡しません。
+
+## 第4-B1弾のFrontend非同期化
+
+主要画面は起動時に選択providerから案件・マスタ・回答・履歴・工程・予定・写真metadataを非同期取得し、取得完了後に従来の業務ルールと描画を利用します。local providerの戻り値にも `await` できる同じ呼出形を使うため、GitHub Pagesの既定localモードとHTTPモードで画面側の保存順序が分岐しません。
+
+- 作成・更新・取消・アーカイブ・マスタ操作・回答・写真metadata・完了報告は、保存成功後にだけ通知、再描画、画面遷移を実行
+- 主要送信ボタンを通信中disabledにして二重登録を防止
+- `409 CONFLICT` 時は編集画面を閉じ、同じHTTP providerから最新情報を再取得。自動上書きは行わない
+- `401 / 403 / 409 / 500 / timeout / network error` を共通メッセージへ変換
+- HTTPモードの通信失敗時はlocalStorageへfallbackせず、データソースを混在させない
+- 公開resident画面は管理用stateを必要とせず、token付きpublic APIだけを利用
+
+GitHub Pagesのmeta設定は引き続き `local` です。ローカル開発時だけ、例えば `?dataSource=http&apiBaseUrl=http://127.0.0.1:8080&apiAuth=mock` でmemory Backendとの契約確認ができます。localhost以外ではqueryによるデータソース上書きを無視します。memory Backendは再起動で消えるため、実運用の共有保存には使用できません。
 
 ## データアクセス層
 

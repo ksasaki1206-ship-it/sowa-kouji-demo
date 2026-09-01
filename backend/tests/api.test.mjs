@@ -45,13 +45,22 @@ test('case list and detail', async () => {
 });
 
 test('case create and update', async () => {
-  const created = await request('/api/v1/cases', { method:'POST', user:'office', body:{ propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', status:'問い合わせ' } });
+  const created = await request('/api/v1/cases', { method:'POST', user:'office', body:{ propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', status:'問い合わせ', auditDetail:'案件を新規登録' } });
   assert.equal(created.response.status, 201);
   assert.equal(created.payload.data.version, 1);
-  const updated = await request(`/api/v1/cases/${created.payload.data.id}`, { method:'PATCH', user:'office', body:{ version:1, status:'現調調整中' } });
+  assert.equal('auditDetail' in created.payload.data, false);
+  const updated = await request(`/api/v1/cases/${created.payload.data.id}`, { method:'PATCH', user:'office', body:{ version:1, status:'現調調整中', auditDetail:'案件情報を編集' } });
   assert.equal(updated.response.status, 200);
   assert.equal(updated.payload.data.version, 2);
   assert.equal(updated.payload.data.status, '現調調整中');
+  assert.equal('auditDetail' in updated.payload.data, false);
+});
+
+test('all demo admin identities can use the mock API', async () => {
+  for (const user of ['nishiyama','takahashi','hajime']) {
+    const result = await request('/api/v1/cases', { user });
+    assert.equal(result.response.status, 200);
+  }
 });
 
 test('not found and validation errors', async () => {

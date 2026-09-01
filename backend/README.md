@@ -29,6 +29,8 @@ npm start
 管理APIのmock認証では開発時だけ `x-mock-user-id` を指定します。
 
 - `nishiyama`: admin
+- `takahashi`: admin
+- `hajime`: admin
 - `office`: office
 - `worker-a`: worker
 
