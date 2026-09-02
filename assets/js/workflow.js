@@ -83,6 +83,11 @@ export function selectableRooms(rooms, propertyId, currentRoomId = '') {
   return (Array.isArray(rooms) ? rooms : []).filter(room => room.propertyId === propertyId && (room.active || room.id === currentRoomId));
 }
 
+export function casePrefillForRoom(property, room) {
+  if (!property?.id || !room?.id || room.propertyId !== property.id) return null;
+  return { propertyId:String(property.id), roomId:String(room.id) };
+}
+
 export function groupCasesByRoom(cases) {
   const groups = new Map();
   (Array.isArray(cases) ? cases : []).forEach(item => {

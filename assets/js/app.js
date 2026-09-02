@@ -4,7 +4,7 @@ import { createApplicationStore } from './application-store.js?v=20260902-25';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
 import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-22';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260901-22';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, casePrefillForRoom, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260902-28';
 import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-22';
 import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-22';
 import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-22';
@@ -167,8 +167,12 @@ function lifecycleStatusHtml(c) {
 }
 
 async function persist(message) {
-  if (!await dataAccess.snapshot.save()) return notify('保存容量を超えました。写真を減らしてください。');
+  if (!await dataAccess.snapshot.save()) {
+    notify('保存容量を超えました。写真を減らしてください。');
+    return false;
+  }
   if (message) notify(message);
+  return true;
 }
 
 function showDataSourceStatus(title, message) {
@@ -631,14 +635,24 @@ async function deletePhoto(c, key, index, button) {
   } finally { if (group?.isConnected) setPhotoGroupPending(group, false); }
 }
 
-function openCaseModal(c) {
+function openCaseForRoom(propertyId, roomId) {
+  const property = propertyById(propertyId);
+  const room = roomById(roomId);
+  const prefill = casePrefillForRoom(property, room);
+  if (!prefill || !room.active) return notify('案件を作成するには、有効な部屋を選択してください。');
+  $('propertyDetailModal').classList.add('hidden');
+  closePropertyAdmin();
+  openCaseModal(null, prefill);
+}
+
+function openCaseModal(c, prefill = {}) {
   if (sessionRole === 'worker' || !can(sessionRole, c ? 'edit' : 'create')) return notify('この操作を行う権限がありません。');
   $('modal').classList.remove('hidden');
   $('modalTitle').textContent = c ? '案件編集' : '新規案件登録';
   const form = $('caseForm');
   form.reset();
   form.elements.id.value = c?.id || '';
-  const source = c || createCase();
+  const source = c || { ...createCase(), propertyId:prefill.propertyId || '', roomId:prefill.roomId || '' };
   editingCaseSnapshot = c ? clone(c) : null;
   ['property','room','residentName','residentPhone','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
   populateCasePropertySelect(source, !c);
@@ -648,7 +662,7 @@ function openCaseModal(c) {
   $('newPropertyFromCase').classList.toggle('hidden', !can(sessionRole, 'manageProperties'));
   $('newRoomFromCase').classList.toggle('hidden', !can(sessionRole, 'manageRooms'));
   updateEndPreviews();
-  form.elements.propertyId.focus();
+  (prefill.roomId ? form.elements.residentName : form.elements.propertyId).focus();
 }
 
 function closeCaseModal() { $('modal').classList.add('hidden'); editingCaseSnapshot = null; }
@@ -1520,9 +1534,15 @@ function openPropertyDetail(id) {
   const rooms = dataAccess.rooms.listByProperty(property.id).slice().sort((a,b) => Number(b.active) - Number(a.active) || a.roomNumber.localeCompare(b.roomNumber, 'ja', { numeric:true }));
   const caseGroups = groupCasesByRoom(cases);
   const editable = can(sessionRole, 'manageRooms');
+  const canCreateCase = can(sessionRole, 'create');
   $('propertyDetailTitle').textContent = property.name;
-  const roomRows = rooms.map(room => `<article class="room-master-row ${room.active ? '' : 'inactive'}"><div><b>${esc(room.roomNumber)}</b>${room.active ? '' : '<span class="badge inactive-badge">無効</span>'}<small>${esc(room.commonNote || '共通備考なし')} ／ 案件 ${cases.filter(item => item.roomId === room.id).length}件</small></div>${editable ? `<div class="actions"><button class="btn edit-room" type="button" data-id="${esc(room.id)}">編集</button><button class="btn toggle-room ${room.active ? 'danger' : ''}" type="button" data-id="${esc(room.id)}">${room.active ? '無効化' : '有効化'}</button></div>` : ''}</article>`).join('') || '<div class="empty">部屋が登録されていません。</div>';
-  const roomForm = editable ? `<form id="roomForm" class="form room-form"><input type="hidden" name="id"><div class="two"><label><span>部屋番号</span><input class="input" name="roomNumber" required placeholder="例：101号室"></label><label><span>部屋共通備考</span><input class="input" name="commonNote" placeholder="鍵・入室時の注意など"></label></div><label class="confirm-check"><input type="checkbox" name="active" checked><span>新規案件で選択できる有効な部屋</span></label><div class="actions"><button class="btn primary" type="submit">部屋を保存</button><button id="clearRoomForm" class="btn" type="button">新規入力に戻す</button></div><div id="roomFormError" class="form-error hidden" role="alert"></div></form>` : '<p class="muted">部屋情報は管理者が編集できます。</p>';
+  const roomRows = rooms.map(room => {
+    const createAction = canCreateCase ? `<button class="btn primary create-room-case" type="button" data-property-id="${esc(property.id)}" data-room-id="${esc(room.id)}" aria-label="${esc(room.roomNumber)}の案件を作成" ${room.active ? '' : 'disabled aria-disabled="true" title="案件を作成するには部屋を有効化してください"'}>案件を作成</button>` : '';
+    const editActions = editable ? `<button class="btn edit-room" type="button" data-id="${esc(room.id)}">編集</button><button class="btn toggle-room ${room.active ? 'danger' : ''}" type="button" data-id="${esc(room.id)}">${room.active ? '無効化' : '有効化'}</button>` : '';
+    const actions = createAction || editActions ? `<div class="actions">${createAction}${editActions}</div>` : '';
+    return `<article class="room-master-row ${room.active ? '' : 'inactive'}"><div><b>${esc(room.roomNumber)}</b>${room.active ? '' : '<span class="badge inactive-badge">無効</span>'}<small>${esc(room.commonNote || '共通備考なし')} ／ 案件 ${cases.filter(item => item.roomId === room.id).length}件</small></div>${actions}</article>`;
+  }).join('') || '<div class="empty">部屋が登録されていません。</div>';
+  const roomForm = editable ? `<form id="roomForm" class="form room-form"><input type="hidden" name="id"><div class="two"><label><span>部屋番号</span><input class="input" name="roomNumber" required placeholder="例：101号室"></label><label><span>部屋共通備考</span><input class="input" name="commonNote" placeholder="鍵・入室時の注意など"></label></div><label class="confirm-check"><input type="checkbox" name="active" checked><span>新規案件で選択できる有効な部屋</span></label><label class="confirm-check room-case-followup"><input type="checkbox" name="createCaseAfterSave" checked><span>登録後、この部屋の案件を続けて作成する</span></label><div class="actions"><button class="btn primary" type="submit">部屋を保存</button><button id="clearRoomForm" class="btn" type="button">新規入力に戻す</button></div><div id="roomFormError" class="form-error hidden" role="alert"></div></form>` : '<p class="muted">部屋情報は管理者が編集できます。</p>';
   const caseRows = caseGroups.map(group => {
     const room = roomById(group.roomId);
     const displayRoom = room?.roomNumber || group.cases[0]?.room || '部屋未登録';
@@ -1535,6 +1555,8 @@ function openPropertyDetail(id) {
     roomEditor.reset();
     roomEditor.elements.id.value = '';
     roomEditor.elements.active.checked = true;
+    roomEditor.elements.createCaseAfterSave.checked = true;
+    roomEditor.elements.createCaseAfterSave.closest('label').classList.remove('hidden');
     setFormError('roomFormError', '');
   };
   roomEditor?.addEventListener('submit', async event => {
@@ -1542,6 +1564,7 @@ function openPropertyDetail(id) {
     if (!can(sessionRole, 'manageRooms')) return notify('この操作を行う権限がありません。');
     const roomId = roomEditor.elements.id.value;
     const existing = roomId ? roomById(roomId) : null;
+    const createCaseAfterSave = !existing && roomEditor.elements.createCaseAfterSave.checked;
     const roomNumber = roomEditor.elements.roomNumber.value.trim();
     const normalizedRoomNumber = normalizeRoomNumber(roomNumber);
     if (!normalizedRoomNumber) return setFormError('roomFormError', '部屋番号を入力してください。');
@@ -1550,19 +1573,22 @@ function openPropertyDetail(id) {
     const now = new Date().toISOString();
     const changes = { roomNumber, normalizedRoomNumber, commonNote:roomEditor.elements.commonNote.value.trim(), active:roomEditor.elements.active.checked, updatedAt:now };
     await runUiAction(() => runWithPending(roomEditor.querySelector('[type="submit"]'), async () => {
-    if (existing) {
-      const before = clone(existing);
-      if (!await dataAccess.rooms.update(existing.id, changes)) return setFormError('roomFormError', '部屋を更新できませんでした。');
-      const edited = before.roomNumber !== roomNumber || before.commonNote !== changes.commonNote;
-      if (edited) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${before.roomNumber}」を編集`);
-      if (before.active !== changes.active) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を${changes.active ? '有効化' : '無効化'}`);
-    } else {
-      const room = { ...createRoom(property.id), ...changes, propertyId:property.id, createdAt:now };
-      if (!await dataAccess.rooms.create(room)) return setFormError('roomFormError', '部屋を追加できませんでした。');
-      addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を追加`);
-    }
-    await persist(existing ? '部屋を更新しました。' : '部屋を追加しました。');
-    openPropertyDetail(property.id);
+      let savedRoom = existing;
+      if (existing) {
+        const before = clone(existing);
+        if (!await dataAccess.rooms.update(existing.id, changes)) return setFormError('roomFormError', '部屋を更新できませんでした。');
+        const edited = before.roomNumber !== roomNumber || before.commonNote !== changes.commonNote;
+        if (edited) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${before.roomNumber}」を編集`);
+        if (before.active !== changes.active) addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を${changes.active ? '有効化' : '無効化'}`);
+      } else {
+        const room = { ...createRoom(property.id), ...changes, propertyId:property.id, createdAt:now };
+        if (!await dataAccess.rooms.create(room)) return setFormError('roomFormError', '部屋を追加できませんでした。');
+        savedRoom = room;
+        addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を追加`);
+      }
+      if (!await persist(existing ? '部屋を更新しました。' : '部屋を追加しました。')) return;
+      if (createCaseAfterSave && savedRoom) return openCaseForRoom(property.id, savedRoom.id);
+      openPropertyDetail(property.id);
     }, '保存中…'));
   });
   $('clearRoomForm')?.addEventListener('click', resetRoomEditor);
@@ -1573,8 +1599,11 @@ function openPropertyDetail(id) {
     roomEditor.elements.roomNumber.value = room.roomNumber;
     roomEditor.elements.commonNote.value = room.commonNote;
     roomEditor.elements.active.checked = room.active;
+    roomEditor.elements.createCaseAfterSave.checked = false;
+    roomEditor.elements.createCaseAfterSave.closest('label').classList.add('hidden');
     roomEditor.elements.roomNumber.focus();
   }));
+  $('propertyDetailContent').querySelectorAll('.create-room-case').forEach(button => button.addEventListener('click', () => openCaseForRoom(button.dataset.propertyId, button.dataset.roomId)));
   $('propertyDetailContent').querySelectorAll('.toggle-room').forEach(button => button.addEventListener('click', () => runUiAction(async () => {
     if (!can(sessionRole, 'manageRooms')) return;
     const room = roomById(button.dataset.id);
