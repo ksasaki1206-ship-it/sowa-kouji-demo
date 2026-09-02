@@ -70,3 +70,25 @@ test('Identity client未設定時はpasswordをBackendへ送らない', async ()
   await assert.rejects(() => auth.login('admin01', 'sensitive-password'), /正式認証clientが設定されていません/);
   assert.equal(requests, 0);
 });
+
+test('formal user管理APIをremote auth adapterへ集約しBearer tokenを付与する', async () => {
+  const calls = [];
+  const apiClient = { async request(path, options = {}) {
+    calls.push({ path, options:structuredClone(options) });
+    if (path === '/api/v1/users' && !options.method) return { data:[{ id:'user-1', loginId:'admin01', role:'admin', active:true, version:1 }] };
+    if (path === '/api/v1/users' && options.method === 'POST') return { data:{ id:'user-2', ...options.body, password:undefined, version:1 } };
+    if (path === '/api/v1/users/user-2' && options.method === 'PATCH') return { data:{ id:'user-2', ...options.body, version:2 } };
+    if (path === '/api/v1/users/user-2/password-reset') return { data:{ id:'user-2', displayName:'追加利用者', version:3 } };
+    throw new Error(`unexpected path: ${path}`);
+  } };
+  const auth = createRemoteAuthController({ apiClient, identityClient:{ configured:true, async getIdToken() { return 'id-token'; } } });
+  assert.equal((await auth.listUsers()).length, 1);
+  await auth.createUser({ loginId:'new-user', displayName:'追加利用者', role:'office', password:'secure-password' });
+  await auth.updateUser('user-2', { version:1, active:false });
+  await auth.resetUserPassword('user-2', { version:2, newPassword:'updated-password' });
+  assert.deepEqual(calls.map(call => call.path), ['/api/v1/users','/api/v1/users','/api/v1/users/user-2','/api/v1/users/user-2/password-reset']);
+  for (const call of calls) assert.equal(call.options.headers.authorization, 'Bearer id-token');
+  assert.deepEqual(calls[1].options.body, { loginId:'new-user', displayName:'追加利用者', role:'office', password:'secure-password' });
+  assert.deepEqual(calls[2].options.body, { version:1, active:false });
+  assert.deepEqual(calls[3].options.body, { version:2, newPassword:'updated-password' });
+});

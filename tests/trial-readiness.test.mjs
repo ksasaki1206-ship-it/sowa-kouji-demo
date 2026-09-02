@@ -33,7 +33,7 @@ test('mobile管理メニューはrole制御対象を共通containerへ折りた�
   assert.match(index, /id="sessionMenuButton"[^>]+aria-expanded="false"[^>]+aria-controls="sessionActions"/);
   assert.match(index, /id="sessionActions" class="session-actions"/);
   assert.match(app, /function setSessionMenu\(open\)/);
-  assert.match(app, /userAdminButton'\)\.classList\.toggle\('hidden', formalAuthMode \|\| !can\(session\.role, 'manageUsers'\)\)/);
+  assert.match(app, /userAdminButton'\)\.classList\.toggle\('hidden', !can\(session\.role, 'manageUsers'\)\)/);
   assert.match(app, /staffAdminButton'\)\.classList\.toggle\('hidden', !can\(session\.role, 'manageStaff'\)\)/);
   assert.match(css, /\.session-menu-toggle\{display:none\}/);
   assert.match(css, /\.session-user\.menu-open \.session-actions\{display:grid\}/);

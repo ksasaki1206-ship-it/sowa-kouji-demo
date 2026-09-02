@@ -1,5 +1,5 @@
 import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-22';
-import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } from './data-access.js?v=20260902-25';
+import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } from './data-access.js?v=20260903-34';
 import { createApplicationStore } from './application-store.js?v=20260903-33';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
@@ -23,6 +23,7 @@ let sessionUser = '';
 let sessionUserId = '';
 let sessionRole = '';
 let sessionStaffId = '';
+let formalUsers = [];
 let scheduleMode = 'property';
 let pendingPhotoAction = null;
 let pendingConflictAction = null;
@@ -1312,7 +1313,7 @@ async function activateSession(session) {
   state.currentUser = session.user;
   await dataAccess.snapshot.save();
   $('loggedInUser').textContent = session.user;
-  $('userAdminButton').classList.toggle('hidden', formalAuthMode || !can(session.role, 'manageUsers'));
+  $('userAdminButton').classList.toggle('hidden', !can(session.role, 'manageUsers'));
   $('staffAdminButton').classList.toggle('hidden', !can(session.role, 'manageStaff'));
   $('propertyButton').classList.toggle('hidden', session.role === 'worker');
   $('propertyButton').textContent = can(session.role, 'manageProperties') ? '物件管理' : '物件情報';
@@ -1375,7 +1376,7 @@ async function saveOwnPassword(event) {
   }, '変更中…');
 }
 
-function renderUserAdmin() {
+function renderLocalUserAdmin() {
   $('userAdminList').innerHTML = dataAccess.users.list().map(user => `<div class="user-admin-row"><div><b>${esc(user.name)}</b><span class="muted">${esc(ROLE_DEFINITIONS[user.role]?.label || user.role)}</span></div><button class="btn reset-password" type="button" data-user="${esc(user.name)}">パスワードをリセット</button></div>`).join('');
   $('userAdminList').querySelectorAll('.reset-password').forEach(button => button.addEventListener('click', () => runUiAction(() => runWithPending(button, async () => {
     const target = button.dataset.user;
@@ -1387,13 +1388,161 @@ function renderUserAdmin() {
   }, 'リセット中…'))));
 }
 
-function openUserAdmin() {
-  if (!can(sessionRole, 'manageUsers')) return;
-  renderUserAdmin();
-  $('userAdminModal').classList.remove('hidden');
+function setUserAdminStatus(message = '', error = false) {
+  $('userAdminStatus').textContent = message;
+  $('userAdminStatus').classList.toggle('error', error);
 }
 
-function closeUserAdmin() { $('userAdminModal').classList.add('hidden'); }
+function hideFormalUserForms() {
+  for (const id of ['userAdminForm','userPasswordResetForm']) {
+    const form = $(id);
+    form.reset();
+    form.classList.add('hidden');
+  }
+  setFormError('userAdminFormError', '');
+  setFormError('userPasswordResetError', '');
+}
+
+function populateUserStaffSelect(selectedId = '') {
+  const select = $('userAdminForm').elements.staffId;
+  const candidates = staffList().filter(person => person.active);
+  const selected = staffById(selectedId);
+  if (selected && !candidates.some(person => person.id === selected.id)) candidates.push(selected);
+  candidates.sort((a,b) => a.name.localeCompare(b.name, 'ja'));
+  select.innerHTML = `<option value="">紐付けなし</option>${candidates.map(person => `<option value="${esc(person.id)}">${esc(person.name)}${person.active ? '' : '（無効・既存）'}</option>`).join('')}`;
+  select.value = selectedId || '';
+}
+
+function renderFormalUserAdmin() {
+  $('userAdminList').innerHTML = formalUsers.slice().sort((a,b) => Number(b.active) - Number(a.active) || a.displayName.localeCompare(b.displayName, 'ja')).map(user => {
+    const staff = staffById(user.staffId);
+    const role = ROLE_DEFINITIONS[user.role]?.label || user.role;
+    return `<article class="user-admin-row ${user.active ? '' : 'inactive'}"><div class="user-admin-main"><div><b>${esc(user.displayName)}</b><span class="badge">${esc(role)}</span>${user.active ? '<span class="badge ok">有効</span>' : '<span class="badge inactive-badge">無効</span>'}</div><small>ログインID：${esc(user.loginId)}</small><small>担当者：${esc(staff?.name || '紐付けなし')} ／ email：${user.email ? '設定あり' : '未設定'}</small></div><div class="actions user-admin-actions"><button class="btn edit-user" type="button" data-id="${esc(user.id)}" aria-label="${esc(user.displayName)}を編集">編集</button><button class="btn reset-formal-password" type="button" data-id="${esc(user.id)}" aria-label="${esc(user.displayName)}のパスワードを再設定">パスワード再設定</button><button class="btn toggle-user-active ${user.active ? 'danger' : ''}" type="button" data-id="${esc(user.id)}" aria-label="${esc(user.displayName)}を${user.active ? '無効化' : '有効化'}">${user.active ? '無効化' : '有効化'}</button></div></article>`;
+  }).join('') || '<div class="empty">ユーザーが登録されていません。</div>';
+  $('userAdminList').querySelectorAll('.edit-user').forEach(button => button.addEventListener('click', () => openFormalUserEditor(formalUsers.find(user => user.id === button.dataset.id))));
+  $('userAdminList').querySelectorAll('.reset-formal-password').forEach(button => button.addEventListener('click', () => openFormalPasswordReset(formalUsers.find(user => user.id === button.dataset.id))));
+  $('userAdminList').querySelectorAll('.toggle-user-active').forEach(button => button.addEventListener('click', () => runUiAction(() => toggleFormalUser(button))));
+}
+
+async function loadFormalUsers() {
+  setUserAdminStatus('ユーザーを読み込んでいます。');
+  formalUsers = await remoteAuthController.listUsers();
+  renderFormalUserAdmin();
+  setUserAdminStatus(`${formalUsers.length}名のユーザーを表示しています。`);
+}
+
+function openFormalUserEditor(user = null) {
+  hideFormalUserForms();
+  const form = $('userAdminForm');
+  form.elements.id.value = user?.id || '';
+  form.elements.version.value = user?.version || '';
+  form.elements.loginId.value = user?.loginId || '';
+  form.elements.loginId.readOnly = Boolean(user);
+  form.elements.displayName.value = user?.displayName || '';
+  form.elements.email.value = user?.email || '';
+  form.elements.role.value = user?.role || 'office';
+  form.elements.active.checked = user?.active !== false;
+  populateUserStaffSelect(user?.staffId || '');
+  const creating = !user;
+  $('userAdminFormTitle').textContent = creating ? 'ユーザー追加' : 'ユーザー編集';
+  $('userInitialPasswordFields').classList.toggle('hidden', !creating);
+  form.elements.password.required = creating;
+  form.elements.confirmPassword.required = creating;
+  $('userSelfWarning').classList.toggle('hidden', !user || user.id !== sessionUserId);
+  form.classList.remove('hidden');
+  form.elements[creating ? 'loginId' : 'displayName'].focus();
+  form.scrollIntoView({ block:'nearest' });
+}
+
+function openFormalPasswordReset(user) {
+  if (!user) return;
+  hideFormalUserForms();
+  const form = $('userPasswordResetForm');
+  form.elements.id.value = user.id;
+  form.elements.version.value = user.version;
+  $('userPasswordResetTarget').textContent = `${user.displayName}（${user.loginId}）`;
+  form.classList.remove('hidden');
+  form.elements.newPassword.focus();
+  form.scrollIntoView({ block:'nearest' });
+}
+
+async function saveFormalUser(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await runWithPending(form.querySelector('[type="submit"]'), async () => {
+    setFormError('userAdminFormError', '');
+    const id = form.elements.id.value;
+    const role = form.elements.role.value;
+    const staffId = form.elements.staffId.value || null;
+    if (role === 'worker' && !staffId) return setFormError('userAdminFormError', '現場担当には担当者紐付けが必要です。');
+    const payload = { displayName:form.elements.displayName.value.trim(), email:form.elements.email.value.trim() || null, role, staffId, active:form.elements.active.checked };
+    if (!id) {
+      const password = form.elements.password.value;
+      if (password.length < 10) return setFormError('userAdminFormError', '初期パスワードは10文字以上で入力してください。');
+      if (password !== form.elements.confirmPassword.value) return setFormError('userAdminFormError', '初期パスワードが一致しません。');
+      payload.loginId = form.elements.loginId.value.trim();
+      payload.password = password;
+    } else payload.version = Number(form.elements.version.value);
+    try {
+      const saved = id ? await remoteAuthController.updateUser(id, payload) : await remoteAuthController.createUser(payload);
+      hideFormalUserForms();
+      await loadFormalUsers();
+      notify(`${saved.displayName}を${id ? '更新' : '追加'}しました。`);
+    } catch (error) {
+      setFormError('userAdminFormError', error?.message || 'ユーザーを保存できませんでした。');
+    }
+  }, '保存中…');
+}
+
+async function saveFormalPasswordReset(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await runWithPending(form.querySelector('[type="submit"]'), async () => {
+    setFormError('userPasswordResetError', '');
+    const password = form.elements.newPassword.value;
+    if (password.length < 10) return setFormError('userPasswordResetError', '新しいパスワードは10文字以上で入力してください。');
+    if (password !== form.elements.confirmPassword.value) return setFormError('userPasswordResetError', '新しいパスワードが一致しません。');
+    try {
+      const saved = await remoteAuthController.resetUserPassword(form.elements.id.value, { version:Number(form.elements.version.value), newPassword:password });
+      hideFormalUserForms();
+      await loadFormalUsers();
+      notify(`${saved.displayName}のパスワードを再設定しました。`);
+    } catch (error) {
+      setFormError('userPasswordResetError', error?.message || 'パスワードを再設定できませんでした。');
+    }
+  }, '再設定中…');
+}
+
+async function toggleFormalUser(button) {
+  const user = formalUsers.find(item => item.id === button.dataset.id);
+  if (!user || !confirm(`${user.displayName}を${user.active ? '無効化' : '有効化'}しますか？${user.id === sessionUserId && user.active ? '\n自分自身を無効化すると再ログインできなくなります。' : ''}`)) return;
+  try {
+    await runWithPending(button, () => remoteAuthController.updateUser(user.id, { version:user.version, active:!user.active }), user.active ? '無効化中…' : '有効化中…');
+    await loadFormalUsers();
+    notify(`${user.displayName}を${user.active ? '無効化' : '有効化'}しました。`);
+  } catch (error) {
+    setUserAdminStatus(error?.message || '有効状態を変更できませんでした。', true);
+  }
+}
+
+async function openUserAdmin() {
+  if (!can(sessionRole, 'manageUsers')) return;
+  hideFormalUserForms();
+  $('localUserAdminPanel').classList.toggle('hidden', formalAuthMode);
+  $('formalUserAdminPanel').classList.toggle('hidden', !formalAuthMode);
+  $('userAdminModal').classList.remove('hidden');
+  if (formalAuthMode) {
+    try { await loadFormalUsers(); }
+    catch (error) { setUserAdminStatus(error?.message || 'ユーザーを読み込めませんでした。', true); }
+  } else renderLocalUserAdmin();
+}
+
+function closeUserAdmin() {
+  hideFormalUserForms();
+  formalUsers = [];
+  $('userAdminList').replaceChildren();
+  $('userAdminModal').classList.add('hidden');
+}
 
 function resetStaffForm() {
   const form = $('staffForm');
@@ -1718,9 +1867,14 @@ async function init() {
   $('closePasswordModal').addEventListener('click', closePasswordModal);
   $('passwordModal').addEventListener('click', event => { if (event.target === $('passwordModal')) closePasswordModal(); });
   $('passwordForm').addEventListener('submit', saveOwnPassword);
-  $('userAdminButton').addEventListener('click', openUserAdmin);
+  $('userAdminButton').addEventListener('click', () => runUiAction(openUserAdmin));
   $('closeUserAdminModal').addEventListener('click', closeUserAdmin);
   $('userAdminModal').addEventListener('click', event => { if (event.target === $('userAdminModal')) closeUserAdmin(); });
+  $('newUserButton').addEventListener('click', () => openFormalUserEditor());
+  $('cancelUserEdit').addEventListener('click', hideFormalUserForms);
+  $('cancelUserPasswordReset').addEventListener('click', hideFormalUserForms);
+  $('userAdminForm').addEventListener('submit', saveFormalUser);
+  $('userPasswordResetForm').addEventListener('submit', saveFormalPasswordReset);
   $('staffAdminButton').addEventListener('click', openStaffAdmin);
   $('closeStaffAdminModal').addEventListener('click', closeStaffAdmin);
   $('staffAdminModal').addEventListener('click', event => { if (event.target === $('staffAdminModal')) closeStaffAdmin(); });

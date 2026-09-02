@@ -19,7 +19,7 @@ test('officeへ部屋管理だけを追加し、admin・workerとの境界を維
   assert.match(app, /if \(!can\(sessionRole, 'manageRooms'\)\) return notify\('この操作を行う権限がありません。'\)/);
   assert.match(app, /propertyButton'\)\.textContent = can\(session\.role, 'manageProperties'\) \? '物件管理' : '物件情報'/);
   assert.match(app, /staffAdminButton'\)\.classList\.toggle\('hidden', !can\(session\.role, 'manageStaff'\)\)/);
-  assert.match(app, /userAdminButton'\)\.classList\.toggle\('hidden', formalAuthMode \|\| !can\(session\.role, 'manageUsers'\)\)/);
+  assert.match(app, /userAdminButton'\)\.classList\.toggle\('hidden', !can\(session\.role, 'manageUsers'\)\)/);
 });
 
 test('入居者回答は送信時点で予約確定ではないことをpublic・内部画面へ示す', async () => {
@@ -42,10 +42,10 @@ test('local・staging・trialは同じ更新済みFrontend資産を読み込む'
     read('../index.html'), read('../staging.html'), read('../trial.html'), read('../assets/js/bootstrap.js')
   ]);
   for (const entry of [index, staging, trial]) {
-    assert.match(entry, /assets\/css\/styles\.css\?v=20260902-32/);
-    assert.match(entry, /assets\/js\/bootstrap\.js\?v=20260903-33/);
+    assert.match(entry, /assets\/css\/styles\.css\?v=20260903-34/);
+    assert.match(entry, /assets\/js\/bootstrap\.js\?v=20260903-34/);
   }
-  assert.match(bootstrap, /\.\/app\.js\?v=20260903-33/);
+  assert.match(bootstrap, /\.\/app\.js\?v=20260903-34/);
   assert.match(index, /name="sowa-data-source" content="local"/);
   assert.match(staging, /name="sowa-data-source" content="http"/);
   assert.match(trial, /name="sowa-data-source" content="http"/);

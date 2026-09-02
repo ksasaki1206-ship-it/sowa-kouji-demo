@@ -4,7 +4,7 @@ import { createHttpDataProvider } from './http-data-provider.js?v=20260902-25';
 import { createLocalDataProvider } from './local-data-provider.js?v=20260901-22';
 import { getSession } from './auth.js?v=20260902-32';
 import { createBrowserIdentityClient } from './identity-client.js?v=20260902-24';
-import { createRemoteAuthController } from './remote-auth.js?v=20260902-24';
+import { createRemoteAuthController } from './remote-auth.js?v=20260903-34';
 
 export const createLocalDataAccess = createLocalDataProvider;
 

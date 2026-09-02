@@ -36,6 +36,18 @@ export function createRemoteAuthController({ apiClient, identityClient }) {
       session = sessionFrom(response.data);
       return { ...session };
     },
+    async listUsers() {
+      return (await apiClient.request('/api/v1/users', { headers:await authorization() })).data;
+    },
+    async createUser(user) {
+      return (await apiClient.request('/api/v1/users', { method:'POST', headers:await authorization(), body:user })).data;
+    },
+    async updateUser(id, changes) {
+      return (await apiClient.request(`/api/v1/users/${encodeURIComponent(id)}`, { method:'PATCH', headers:await authorization(), body:changes })).data;
+    },
+    async resetUserPassword(id, changes) {
+      return (await apiClient.request(`/api/v1/users/${encodeURIComponent(id)}/password-reset`, { method:'POST', headers:await authorization(), body:changes })).data;
+    },
     async logout() {
       let auditRecorded = true;
       try { await apiClient.request('/api/v1/auth/logout', { method:'POST', headers:await authorization() }); }

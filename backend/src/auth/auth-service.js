@@ -29,7 +29,10 @@ const publicUser = user => user ? ({
 const validateRoleAndStaff = async (data, staffStore) => {
   if (!ROLES.has(data.role)) throw validationError('roleが不正です。', { field:'role' });
   if (data.role === 'worker' && !data.staffId) throw validationError('workerにはstaffIdが必要です。', { field:'staffId' });
-  if (data.staffId && !await staffStore.get(data.staffId)) throw validationError('指定された担当者が存在しません。', { field:'staffId' });
+  if (data.staffId) {
+    const staff = await staffStore.get(data.staffId);
+    if (!staff || staff.active !== true) throw validationError('有効な担当者を選択してください。', { field:'staffId' });
+  }
 };
 
 export function createAuthService({
@@ -123,7 +126,9 @@ export function createAuthService({
       const version = Number(body?.version);
       if (!Number.isInteger(version) || version < 1) throw validationError('更新には現在のversionが必要です。', { field:'version' });
       const updated = await userStore.update(id, safe, { expectedVersion:version });
-      await audit(actor, `${updated.displayName}のログインユーザー情報を更新`);
+      const labels = { loginId:'loginId', email:'email設定', displayName:'表示名', role:'role', staffId:'担当者紐付け', active:'有効状態' };
+      const changed = Object.keys(safe).filter(key => safe[key] !== current[key]).map(key => labels[key]);
+      await audit(actor, `${updated.displayName}のログインユーザー情報を更新${changed.length ? `（${changed.join('・')}）` : ''}`);
       return publicUser(updated);
     },
     async resetPassword(id, body, actor) {

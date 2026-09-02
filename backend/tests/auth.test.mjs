@@ -134,6 +134,30 @@ test('admin user管理・role/staffId認可', async t => {
     assert.equal(shortPassword.response.status, 400);
     const invalidEmail = await request('/api/v1/users', { method:'POST', idToken:admin.idToken, body:{ loginId:'invalid-email', email:'not-an-email', displayName:'不正email', role:'office', password:RESET_PASSWORD } });
     assert.equal(invalidEmail.response.status, 400);
+    const invalidRole = await request('/api/v1/users', { method:'POST', idToken:admin.idToken, body:{ loginId:'invalid-role', displayName:'不正role', role:'owner', password:RESET_PASSWORD } });
+    assert.equal(invalidRole.response.status, 400);
+    await businessProvider.staff.create({ id:'staff-inactive', name:'停止担当者', active:false, canSurvey:true, canWork:true, version:1 });
+    const inactiveStaff = await request('/api/v1/users', { method:'POST', idToken:admin.idToken, body:{ loginId:'inactive-staff-worker', displayName:'停止担当紐付け', role:'worker', staffId:'staff-inactive', password:RESET_PASSWORD } });
+    assert.equal(inactiveStaff.response.status, 400);
+    const workerWithoutStaff = await request('/api/v1/users', { method:'POST', idToken:admin.idToken, body:{ loginId:'worker-without-staff', displayName:'担当なしworker', role:'worker', password:RESET_PASSWORD } });
+    assert.equal(workerWithoutStaff.response.status, 400);
+    const createdAdmin = await request('/api/v1/users', { method:'POST', idToken:admin.idToken, body:{ loginId:'new-admin', displayName:'追加管理者', role:'admin', password:RESET_PASSWORD } });
+    assert.equal(createdAdmin.response.status, 201);
+    assert.equal(createdAdmin.payload.data.role, 'admin');
+  });
+
+  await t.test('表示名・role・active・担当者紐付けをversion付きで更新し秘密値を返さない', async () => {
+    const current = await userStore.findByIdentifier('new-office');
+    const updated = await request(`/api/v1/users/${current.id}`, { method:'PATCH', idToken:admin.idToken, body:{ version:current.version, displayName:'更新事務所', role:'worker', staffId:'staff-worker-a', active:true } });
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.payload.data.displayName, '更新事務所');
+    assert.equal(updated.payload.data.role, 'worker');
+    assert.equal(updated.payload.data.staffId, 'staff-worker-a');
+    assert.equal(updated.payload.data.active, true);
+    for (const field of ['password','passwordHash','passwordSalt','token','customToken']) assert.equal(field in updated.payload.data, false);
+    const auditText = JSON.stringify(await businessProvider.audit.list());
+    assert.match(auditText, /表示名・role・担当者紐付け/);
+    assert.equal(auditText.includes(RESET_PASSWORD), false);
   });
 
   await t.test('password reset後は新passwordのみ有効でauditへ秘密を残さない', async () => {
@@ -169,6 +193,21 @@ test('admin user管理・role/staffId認可', async t => {
     assert.equal((await request('/api/v1/cases/case-001', { idToken:worker.idToken })).response.status, 200);
     assert.equal((await request('/api/v1/cases/case-002', { idToken:worker.idToken })).response.status, 403);
   });
+});
+
+test('最後のactive adminは無効化・降格できず、別のactive adminがいる場合だけ変更できる', async () => {
+  const singleAdmin = await seedUser({ id:'only-admin', loginId:'only-admin', email:null, displayName:'唯一管理者', role:'admin', staffId:null, active:true });
+  const store = createMemoryUserStore([singleAdmin]);
+  const provider = createMemoryProvider();
+  const auth = createAuthService({ userStore:store, identityProvider:createFakeIdentityProvider(), staffStore:provider.staff, auditStore:provider.audit });
+  await assert.rejects(() => auth.updateUser(singleAdmin.id, { version:1, active:false }, singleAdmin), /最後の有効な管理者/);
+  await assert.rejects(() => auth.updateUser(singleAdmin.id, { version:1, role:'office' }, singleAdmin), /最後の有効な管理者/);
+  const secondAdmin = await seedUser({ id:'second-admin', loginId:'second-admin', email:null, displayName:'第二管理者', role:'admin', staffId:null, active:true });
+  await store.create(secondAdmin);
+  const changed = await auth.updateUser(singleAdmin.id, { version:1, active:false }, singleAdmin);
+  assert.equal(changed.active, false);
+  await store.close();
+  await provider.close();
 });
 
 test('scrypt credentialsと初期admin bootstrap', async () => {
