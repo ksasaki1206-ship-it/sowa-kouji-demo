@@ -104,7 +104,7 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
   /cases:
     get:
-      summary: 案件一覧。workerは担当案件だけ。
+      summary: 案件一覧。workerは担当案件だけ。入居者名・電話番号は認証済みの許可案件だけに含む。
       responses:
         '200': { $ref: '#/components/responses/List' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -120,7 +120,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CaseId'
     get:
-      summary: 案件詳細
+      summary: 案件詳細。入居者名・電話番号は認証済みの許可案件だけに含む。
       responses:
         '200': { $ref: '#/components/responses/Success' }
         '403': { $ref: '#/components/responses/Forbidden' }

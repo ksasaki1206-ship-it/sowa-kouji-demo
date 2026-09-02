@@ -34,7 +34,7 @@ Cloud Run上のHTTPS APIを想定したBackendです。PostgreSQL共有永続化
 | `properties` | id、name、address、management_company、owner_name、active、version |
 | `rooms` | id、property_id、room_number、normalized_room_number、active、version |
 | `staff` | id、name、login_user_id、can_survey、can_work、active、version |
-| `cases` | id、property_id、room_id、status、lifecycle_status、is_archived、各担当ID、現調/施工日時、材料日、見積、resident token、version |
+| `cases` | id、property_id、room_id、resident_name、resident_phone、status、lifecycle_status、is_archived、各担当ID、現調/施工日時、材料日、見積、resident token、version |
 | `responses` | id、case/property/room ID、希望日時、連絡先、受付日時、反映状態 |
 | `workflow_history` | case_id、順序、工程、完了日時、実施者 |
 | `schedule_history` | case_id、順序、種別、変更前後、理由、変更者 |

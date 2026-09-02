@@ -46,17 +46,20 @@ test('case list and detail', async () => {
 });
 
 test('case create and update', async () => {
-  const created = await request('/api/v1/cases', { method:'POST', user:'office', body:{ propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', status:'問い合わせ', auditDetail:'案件を新規登録', photos:{ after:['data:image/jpeg;base64,AAAA'] }, photoMetadata:{ after:[] }, passwordHash:'保存禁止' } });
+  const created = await request('/api/v1/cases', { method:'POST', user:'office', body:{ propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', residentName:'試用入居者', residentPhone:'090-0000-0000', status:'問い合わせ', auditDetail:'案件を新規登録', photos:{ after:['data:image/jpeg;base64,AAAA'] }, photoMetadata:{ after:[] }, passwordHash:'保存禁止' } });
   assert.equal(created.response.status, 201);
   assert.equal(created.payload.data.version, 1);
   assert.equal('auditDetail' in created.payload.data, false);
   assert.equal('photos' in created.payload.data, false);
   assert.equal('photoMetadata' in created.payload.data, false);
   assert.equal('passwordHash' in created.payload.data, false);
-  const updated = await request(`/api/v1/cases/${created.payload.data.id}`, { method:'PATCH', user:'office', body:{ version:1, status:'現調調整中', auditDetail:'案件情報を編集' } });
+  assert.equal(created.payload.data.residentName, '試用入居者');
+  assert.equal(created.payload.data.residentPhone, '090-0000-0000');
+  const updated = await request(`/api/v1/cases/${created.payload.data.id}`, { method:'PATCH', user:'office', body:{ version:1, status:'現調調整中', residentPhone:'03-1111-2222', auditDetail:'案件情報を編集' } });
   assert.equal(updated.response.status, 200);
   assert.equal(updated.payload.data.version, 2);
   assert.equal(updated.payload.data.status, '現調調整中');
+  assert.equal(updated.payload.data.residentPhone, '03-1111-2222');
   assert.equal('auditDetail' in updated.payload.data, false);
 });
 
@@ -101,6 +104,8 @@ test('worker sees only assigned cases and foreign detail is 403', async () => {
   assert.deepEqual(list.payload.data.map(item => item.id), ['case-001']);
   const own = await request('/api/v1/cases/case-001', { user:'worker-a' });
   assert.equal(own.response.status, 200);
+  assert.equal(own.payload.data.residentName, '山田様');
+  assert.equal(own.payload.data.residentPhone, '03-0000-0000');
   const foreign = await request('/api/v1/cases/case-002', { user:'worker-a' });
   assert.equal(foreign.response.status, 403);
   assert.equal(foreign.payload.error.code, 'FORBIDDEN');
@@ -138,11 +143,14 @@ test('public resident token returns minimum fields and accepts a response', asyn
   assert.equal(publicInfo.response.status, 200);
   assert.deepEqual(Object.keys(publicInfo.payload.data).sort(), ['accepting','closed','propertyName','roomName']);
   const serialized = JSON.stringify(publicInfo.payload);
-  for (const internal of ['estimateAmount','workStaffId','managementCompany','ownerName','audit','password','user']) assert.equal(serialized.includes(internal), false);
+  for (const internal of ['estimateAmount','workStaffId','managementCompany','ownerName','residentName','residentPhone','phone','audit','password','user']) assert.equal(serialized.includes(internal), false);
   const submitted = await request('/api/v1/public/resident/demo-public-token-case-001/responses', { method:'POST', body:{ name:'テスト入居者', phone:'000-0000-0000', d1:'2026-09-10', t1:'午前', d2:'2026-09-11', t2:'午後', note:'' } });
   assert.equal(submitted.response.status, 201);
   assert.equal(submitted.payload.data.accepted, true);
   assert.deepEqual(Object.keys(submitted.payload.data).sort(), ['accepted','id','receivedAt']);
+  const reflected = await request('/api/v1/cases/case-001', { user:'office' });
+  assert.equal(reflected.payload.data.residentName, 'テスト入居者');
+  assert.equal(reflected.payload.data.residentPhone, '000-0000-0000');
 });
 
 test('invalid public resident token is 404 without case information', async () => {

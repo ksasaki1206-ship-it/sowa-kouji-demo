@@ -7,6 +7,7 @@ import { test } from 'node:test';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const index = await readFile(resolve(root, 'index.html'), 'utf8');
 const staging = await readFile(resolve(root, 'staging.html'), 'utf8');
+const trial = await readFile(resolve(root, 'trial.html'), 'utf8');
 const meta = (source, name) => source.match(new RegExp(`<meta\\s+name=["']${name}["']\\s+content=["']([^"']*)["']`))?.[1] || '';
 
 test('index.htmlはlocal demo入口のまま維持する', () => {
@@ -35,4 +36,21 @@ test('staging.htmlに認証secretやmock設定を埋め込まない', () => {
   }
   assert.doesNotMatch(staging, /sowaIdentityPlatformAdapter|IDENTITY_WEB_API_KEY/);
   assert.match(staging, /firebase-identity-adapter|auth\/config|bootstrap\.js/);
+});
+
+test('trial.htmlは同じ共有環境を使う総和様向け入口である', () => {
+  assert.equal(meta(trial, 'sowa-data-source'), 'http');
+  assert.equal(meta(trial, 'sowa-api-base-url'), 'https://sowa-kouji-api-staging-742289385009.asia-northeast1.run.app');
+  assert.equal(meta(trial, 'sowa-api-auth-mode'), 'identity');
+  assert.equal(meta(trial, 'robots'), 'noindex,nofollow');
+  assert.match(trial, /fetch\('\.\/index\.html'/);
+  assert.match(trial, /総和 工事進捗管理（試用版）/);
+  assert.match(trial, /resetButton\.classList\.add\('hidden'\)/);
+  assert.doesNotMatch(trial, />[^<]*(?:staging|debug|metadata|共有API|開発環境)[^<]*</i);
+});
+
+test('trial.htmlにsecretやmock認証情報を埋め込まない', () => {
+  for (const pattern of [/AIza[0-9A-Za-z_-]{20,}/, /BEGIN (?:RSA |EC )?PRIVATE KEY/, /service_account/i, /DB_PASSWORD/i, /x-mock-user-id/i, /password\s*=/i]) {
+    assert.doesNotMatch(trial, pattern);
+  }
 });

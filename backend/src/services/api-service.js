@@ -284,7 +284,7 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
           d1:requiredString(body, 'd1', '第1希望日'), t1:String(body.t1 || ''), d2:requiredString(body, 'd2', '第2希望日'), t2:String(body.t2 || ''), note:String(body.note || ''),
           receivedAt:new Date().toISOString(), applied:true, version:1
         });
-        const updated = await tx.cases.update(item.id, { residentResponseId:response.id, residentName:response.name || item.residentName || '' }, { expectedVersion:item.version });
+        const updated = await tx.cases.update(item.id, { residentResponseId:response.id, residentName:response.name || item.residentName || '', residentPhone:response.phone || item.residentPhone || '' }, { expectedVersion:item.version });
         await writeAudit(tx, null, updated, '入居者回答を受信');
         return { id:response.id, receivedAt:response.receivedAt, accepted:true };
       });

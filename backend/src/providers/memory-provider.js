@@ -44,7 +44,7 @@ export function createMockSeed() {
     rooms:[{ id:'room-001', propertyId:'property-001', roomNumber:'101号室', active:true, version:1, createdAt:timestamp, updatedAt:timestamp }],
     staff:[{ id:'staff-worker-a', name:'職人A', loginUserId:'worker-a', canSurvey:true, canWork:true, active:true, version:1, createdAt:timestamp, updatedAt:timestamp }],
     cases:[
-      { id:'case-001', propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', status:'施工予定', lifecycleStatus:'active', isArchived:false, surveyStaffId:'', workStaffId:'staff-worker-a', estimateAmount:385000, residentAccessToken:'demo-public-token-case-001', residentAccessEnabled:true, workflowHistory:[{ step:'inquiry', completedAt:timestamp, completedBy:'事務所' }], scheduleHistory:[], version:1, createdAt:timestamp, updatedAt:timestamp },
+      { id:'case-001', propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', residentName:'山田様', residentPhone:'03-0000-0000', status:'施工予定', lifecycleStatus:'active', isArchived:false, surveyStaffId:'', workStaffId:'staff-worker-a', estimateAmount:385000, residentAccessToken:'demo-public-token-case-001', residentAccessEnabled:true, workflowHistory:[{ step:'inquiry', completedAt:timestamp, completedBy:'事務所' }], scheduleHistory:[], version:1, createdAt:timestamp, updatedAt:timestamp },
       { id:'case-002', propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', status:'見積中', lifecycleStatus:'active', isArchived:false, surveyStaffId:'', workStaffId:'', estimateAmount:520000, residentAccessToken:'demo-public-token-case-002', residentAccessEnabled:true, workflowHistory:[], scheduleHistory:[], version:1, createdAt:timestamp, updatedAt:timestamp }
     ],
     responses:[],

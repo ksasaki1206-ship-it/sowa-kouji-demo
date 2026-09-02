@@ -50,7 +50,7 @@ const dateKey = (offset = 0) => {
 };
 
 const caseData = (data) => ({
-  id: '', propertyId: '', property: '', roomId: '', room: '', residentName: '', address: '', owner: '', status: '問い合わせ',
+  id: '', propertyId: '', property: '', roomId: '', room: '', residentName: '', residentPhone: '', address: '', owner: '', status: '問い合わせ',
   lifecycleStatus:'active', isArchived:false, archivedAt:'', archivedBy:'', archiveReason:'',
   cancelledAt:'', cancelledBy:'', cancelReasonCategory:'', cancelReason:'', scheduleHistory:[],
   residentAccessToken:generateResidentAccessToken(), residentAccessEnabled:true, residentAccessCreatedAt:new Date().toISOString(), residentAccessUpdatedAt:'',
@@ -237,7 +237,7 @@ export function migrateState(raw) {
     const id = c.id || `c-legacy-${index}`;
     const photos = normalizePhotos(c.photos);
     return caseData({
-    ...c, id, residentName: c.residentName || demo?.residentName || '', materialOrderedAt:c.materialOrderedAt || '', materialDeliveryAt: c.materialDeliveryAt || '', materialReceivedAt:c.materialReceivedAt || '', supplier:c.supplier || '', materialNote:c.materialNote || '',
+    ...c, id, residentName: c.residentName || demo?.residentName || '', residentPhone:String(c.residentPhone || '').trim(), materialOrderedAt:c.materialOrderedAt || '', materialDeliveryAt: c.materialDeliveryAt || '', materialReceivedAt:c.materialReceivedAt || '', supplier:c.supplier || '', materialNote:c.materialNote || '',
     lifecycleStatus:c.lifecycleStatus === 'cancelled' ? 'cancelled' : 'active', isArchived:c.isArchived === true, archivedAt:c.archivedAt || '', archivedBy:c.archivedBy || '', archiveReason:c.archiveReason || '',
     cancelledAt:c.cancelledAt || '', cancelledBy:c.cancelledBy || '', cancelReasonCategory:c.cancelReasonCategory || '', cancelReason:c.cancelReason || '', scheduleHistory:normalizeScheduleHistory(c.scheduleHistory),
     residentAccessToken:c.residentAccessToken || demo?.residentAccessToken || '', residentAccessEnabled:c.residentAccessEnabled !== false,

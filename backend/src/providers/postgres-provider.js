@@ -13,7 +13,7 @@ const DEFINITIONS = Object.freeze({
   rooms:{ table:'rooms', label:'部屋', fields:{ propertyId:['property_id',identity], roomNumber:['room_number',identity], normalizedRoomNumber:['normalized_room_number',identity], active:['active',bool] } },
   staff:{ table:'staff', label:'担当者', fields:{ name:['name',identity], loginUserId:['login_user_id',identity], canSurvey:['can_survey',bool], canWork:['can_work',bool], active:['active',bool] } },
   cases:{ table:'cases', label:'案件', fields:{
-    propertyId:['property_id',identity], roomId:['room_id',identity], property:['property_name',identity], room:['room_name',identity], residentName:['resident_name',identity],
+    propertyId:['property_id',identity], roomId:['room_id',identity], property:['property_name',identity], room:['room_name',identity], residentName:['resident_name',identity], residentPhone:['resident_phone',identity],
     address:['address',identity], owner:['owner_name',identity], status:['status',identity], lifecycleStatus:['lifecycle_status',identity], isArchived:['is_archived',bool],
     surveyStaffId:['survey_staff_id',identity], workStaffId:['work_staff_id',identity], surveyAt:['survey_at',identity], workAt:['work_at',identity],
     materialOrderedAt:['material_ordered_at',identity], materialDeliveryAt:['material_delivery_at',identity], materialReceivedAt:['material_received_at',identity],

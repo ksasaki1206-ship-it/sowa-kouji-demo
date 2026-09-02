@@ -9,12 +9,12 @@
   <meta name="sowa-api-base-url" content="https://sowa-kouji-api-staging-742289385009.asia-northeast1.run.app">
   <meta name="sowa-api-auth-mode" content="identity">
   <meta name="sowa-api-timeout-ms" content="12000">
-  <title>総和 工事進捗管理（試用環境）</title>
+  <title>総和 工事進捗管理（試用版）</title>
   <link rel="stylesheet" href="assets/css/styles.css?v=20260902-27">
 </head>
 <body>
-  <main id="stagingLoading" class="login-shell">
-    <div class="login-card"><p class="muted">試用環境を読み込んでいます。</p></div>
+  <main id="trialLoading" class="login-shell">
+    <div class="login-card"><p class="muted">工事進捗管理を読み込んでいます。</p></div>
   </main>
   <script type="module">
     try {
@@ -24,18 +24,18 @@
       source.querySelector('script[src*="bootstrap.js"]')?.remove();
       document.body.replaceChildren(...[...source.body.childNodes].map(node => document.importNode(node, true)));
 
-      document.querySelector('.topbar .muted').textContent = '試用環境';
+      document.querySelector('.topbar .muted').textContent = '1週間試用版';
       document.querySelector('#dataSourceView .login-note').textContent = '接続できない場合は、時間をおいて再度お試しください。';
-      document.querySelector('#residentPublicView .login-note').textContent = 'このページは総和工業の試用回答画面です。';
-      document.querySelector('footer.foot').textContent = '※試用環境のデータはクラウドで共有されます。';
+      document.querySelector('#residentPublicView .login-note').textContent = 'このページは総和工業の希望日時回答画面です。';
+      document.querySelector('footer.foot').textContent = '※入力内容と写真は関係者間で共有されます。';
       const resetButton = document.getElementById('resetDemo');
       resetButton.classList.add('hidden');
       resetButton.setAttribute('aria-hidden', 'true');
 
       await import('./assets/js/bootstrap.js?v=20260902-27');
     } catch (error) {
-      console.error('試用環境を読み込めませんでした。', error);
-      document.getElementById('stagingLoading').innerHTML = '<div class="login-card"><h1>試用環境を読み込めませんでした</h1><p class="muted">時間をおいて再読み込みしてください。</p></div>';
+      console.error('工事進捗管理を読み込めませんでした。', error);
+      document.getElementById('trialLoading').innerHTML = '<div class="login-card"><h1>画面を読み込めませんでした</h1><p class="muted">時間をおいて再読み込みしてください。</p></div>';
     }
   </script>
 </body>

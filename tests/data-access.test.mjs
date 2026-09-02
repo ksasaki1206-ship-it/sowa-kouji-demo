@@ -20,7 +20,7 @@ const legacy = migrateState({
   auditLogs:[{ id:'legacy-audit', at:'2026-08-01T09:00:00.000Z', user:'事務所', caseId:'legacy-1', detail:'既存履歴' }],
   responses:[{ id:'legacy-response', caseId:'legacy-1', property:'既存物件', room:'101号室', name:'既存入居者', receivedAt:'2026-08-01T10:00:00.000Z' }],
   cases:[{
-    id:'legacy-1', property:'既存物件', room:'101号室', status:'問い合わせ',
+    id:'legacy-1', property:'既存物件', room:'101号室', residentName:'既存入居者', residentPhone:' 03-0000-0000 ', status:'問い合わせ',
     address:'既存住所A', owner:'既存管理A',
     surveyStaff:'既存職人', surveyAt:'2026-09-02T10:00', workStaff:'既存職人', workAt:'2026-09-03T13:00',
     workflowHistory:[{ step:'inquiry', completedAt:'2026-08-01T08:00:00.000Z', completedBy:'事務所' }],
@@ -44,6 +44,8 @@ assert.equal(legacyCase.workflowHistory[0].step, 'inquiry');
 assert.equal(legacyCase.lifecycleStatus, 'active');
 assert.deepEqual(legacyCase.scheduleHistory, []);
 assert.equal(legacyCase.isArchived, false);
+assert.equal(legacyCase.residentPhone, '03-0000-0000');
+assert.equal(samePropertyCase.residentPhone, '');
 assert.equal(legacy.auditLogs[0].detail, '既存履歴');
 assert.equal(legacy.responses[0].name, '既存入居者');
 assert.equal(legacy.responses[0].caseId, legacyCase.id);

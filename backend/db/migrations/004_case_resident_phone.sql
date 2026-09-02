@@ -1,0 +1,2 @@
+ALTER TABLE cases
+  ADD COLUMN IF NOT EXISTS resident_phone text NOT NULL DEFAULT '';

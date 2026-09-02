@@ -347,12 +347,53 @@ function photoGroupHtml(c, key, label) {
   const photos = dataAccess.photos.list(c.id, key);
   const cameraInputId = `photo-camera-${key}`;
   const libraryInputId = `photo-library-${key}`;
-  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><details class="photoPicker"><summary class="uploadLabel">＋ 写真を追加</summary><div class="photoActions" role="group" aria-label="${esc(label)}の写真追加方法"><button class="btn photoChoice photoTrigger" type="button" data-target="${cameraInputId}" aria-label="${esc(label)}をカメラで撮影する">撮影する</button><button class="btn photoChoice photoTrigger" type="button" data-target="${libraryInputId}" aria-label="${esc(label)}を端末から選ぶ">写真を選ぶ</button><input id="${cameraInputId}" class="photoInput" type="file" accept="image/*" capture="environment" data-key="${key}" hidden><input id="${libraryInputId}" class="photoInput" type="file" accept="image/*" multiple data-key="${key}" hidden></div></details><div class="hint">1回最大6枚、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${esc(photo.source)}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || 'metadata')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+  return `<div class="photoGroup" data-photo-group="${key}"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><details class="photoPicker"><summary class="uploadLabel">＋ 写真を追加</summary><div class="photoActions" role="group" aria-label="${esc(label)}の写真追加方法"><button class="btn photoChoice photoTrigger" type="button" data-target="${cameraInputId}" aria-label="${esc(label)}をカメラで撮影する">撮影する</button><button class="btn photoChoice photoTrigger" type="button" data-target="${libraryInputId}" aria-label="${esc(label)}を端末から選ぶ">写真を選ぶ</button><input id="${cameraInputId}" class="photoInput" type="file" accept="image/*" capture="environment" data-key="${key}" hidden><input id="${libraryInputId}" class="photoInput" type="file" accept="image/*" multiple data-key="${key}" hidden></div></details><div class="photoProgress hidden" role="status" aria-live="polite"></div><div class="hint">1回最大6枚、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${esc(photo.source)}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || '写真')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+}
+
+function setPhotoGroupPending(group, pending, message = '') {
+  if (!group) return;
+  group.dataset.photoPending = pending ? 'true' : 'false';
+  group.setAttribute('aria-busy', String(pending));
+  group.querySelectorAll('.photoTrigger,.del').forEach(control => { control.disabled = pending; });
+  const progress = group.querySelector('.photoProgress');
+  if (progress) {
+    progress.textContent = message;
+    progress.classList.toggle('hidden', !pending);
+  }
+}
+
+function refreshPhotoGroup(c, key, { open = false, focusTarget = '' } = {}) {
+  const root = $('detailCard');
+  const previous = root.querySelector(`.photoGroup[data-photo-group="${key}"]`);
+  if (!previous) return;
+  const container = document.createElement('div');
+  const current = caseById(c.id) || c;
+  container.innerHTML = photoGroupHtml(current, key, PHOTO_GROUPS[key]);
+  const replacement = container.firstElementChild;
+  replacement.querySelector('.photoPicker').open = open;
+  previous.replaceWith(replacement);
+  wirePhotoActions(current, replacement);
+  const status = root.querySelector('[data-case-status]');
+  if (status) status.textContent = current.status;
+  const workerStatus = root.querySelector('.worker-photo-status');
+  if (workerStatus) workerStatus.innerHTML = ['before','during','after'].map(group => `<span class="${current.photos[group].length ? 'ok' : 'missing'}">${esc(PHOTO_GROUPS[group])} ${current.photos[group].length}枚</span>`).join('');
+  const focus = focusTarget ? replacement.querySelector(`[data-target="${focusTarget}"]`) : replacement.querySelector('.uploadLabel');
+  focus?.focus({ preventScroll:true });
 }
 
 function wirePhotoInputs(c, root = document) {
   root.querySelectorAll('.photoTrigger').forEach(button => button.addEventListener('click', () => $(button.dataset.target)?.click()));
-  root.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => runUiAction(() => handleFiles(c, input.dataset.key, event.target.files))));
+  root.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => {
+    const group = input.closest('.photoGroup');
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    runUiAction(() => handleFiles(c, input.dataset.key, files, { group, focusTarget:input.id }));
+  }));
+}
+
+function wirePhotoActions(c, root = document) {
+  wirePhotoInputs(c, root);
+  root.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index), button))));
 }
 
 function caseHistoryHtml(c) {
@@ -373,13 +414,12 @@ function openWorkerDetail(c) {
   const linkedStaff = currentSessionStaff();
   const workAssigned = linkedStaff ? c.workStaffId === linkedStaff.id || (!sessionStaffId && c.workStaff === sessionUser) : c.workStaff === sessionUser;
   $('detailCard').innerHTML = `
-    <section class="card worker-detail-head"><span class="event-kind ${workAssigned ? 'work' : 'survey'}">${workAssigned ? '工事' : '現調'}</span><h1>${esc(c.property)} ${esc(c.room)}</h1><span class="badge">${esc(c.status)}</span></section>
-    <section class="card worker-info"><div><span class="lab">住所</span><b>${esc(c.address || '住所未登録')}</b></div><div><span class="lab">日時</span><b>${esc(formatPlan(workAssigned ? c.workAt : c.surveyAt, workAssigned ? c.workDurationMinutes : c.surveyDurationMinutes))}</b></div><div><span class="lab">現場備考</span><b>${esc(c.note || 'なし')}</b></div></section>
+    <section class="card worker-detail-head"><span class="event-kind ${workAssigned ? 'work' : 'survey'}">${workAssigned ? '工事' : '現調'}</span><h1>${esc(c.property)} ${esc(c.room)}</h1><span class="badge" data-case-status>${esc(c.status)}</span></section>
+    <section class="card worker-info"><div><span class="lab">入居者名</span><b>${esc(c.residentName || '未登録')}</b></div><div><span class="lab">電話番号</span><b>${esc(c.residentPhone || '未登録')}</b></div><div><span class="lab">住所</span><b>${esc(c.address || '住所未登録')}</b></div><div><span class="lab">日時</span><b>${esc(formatPlan(workAssigned ? c.workAt : c.surveyAt, workAssigned ? c.workDurationMinutes : c.surveyDurationMinutes))}</b></div><div><span class="lab">現場備考</span><b>${esc(c.note || 'なし')}</b></div></section>
     <section class="card detail-card"><h2 class="section-title">必要写真</h2><div class="worker-photo-status">${['before','during','after'].map(key => `<span class="${c.photos[key].length ? 'ok' : 'missing'}">${esc(PHOTO_GROUPS[key])} ${c.photos[key].length}枚</span>`).join('')}</div><div class="gallery worker-gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
     ${workAssigned ? '<button id="workerCompleteButton" class="btn primary worker-complete" type="button">作業完了報告</button>' : ''}
     <section class="card detail-card"><h2 class="section-title">工程</h2>${workflowTimelineHtml(c)}</section>`;
-  wirePhotoInputs(c, $('detailCard'));
-  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index)))));
+  wirePhotoActions(c, $('detailCard'));
   $('workerCompleteButton')?.addEventListener('click', () => openWorkerCompletion(c));
   show('detail');
 }
@@ -396,7 +436,7 @@ function openDetail(id) {
   const active = isOperationalCase(c);
   const lifecycleBadges = `${isCancelledCase(c) ? '<span class="badge cancelled-badge">取消</span>' : ''}${isArchivedCase(c) ? '<span class="badge inactive-badge">アーカイブ</span>' : ''}`;
   $('detailCard').innerHTML = `
-    <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div><div class="muted">${esc(c.residentName || '入居者名未登録')}</div></div><div class="case-badges"><span class="badge">${esc(c.status)}</span>${lifecycleBadges}</div></div><div class="kv"><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
+    <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div></div><div class="case-badges"><span class="badge" data-case-status>${esc(c.status)}</span>${lifecycleBadges}</div></div><div class="kv"><div><div class="lab">入居者名</div><div class="val">${esc(c.residentName || '未登録')}</div></div><div><div class="lab">電話番号</div><div class="val">${esc(c.residentPhone || '未登録')}</div></div><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
     ${lifecycleStatusHtml(c)}
     <section class="card detail-card action-card"><div class="lab">次のアクション</div><div class="big">${esc(nextAction(c))}</div>${alerts.length ? `<div class="detail-alerts">${alerts.map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div>` : '<div class="muted">現在、要対応アラートはありません。</div>'}</section>
     <section class="card detail-card"><h2 class="section-title">入居者回答</h2>${answerHtml(c)}</section>
@@ -507,8 +547,7 @@ async function restoreArchived(c) {
 }
 
 function wireDetail(c) {
-  wirePhotoInputs(c, $('detailCard'));
-  document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index)))));
+  wirePhotoActions(c, $('detailCard'));
   $('advance')?.addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, async () => {
     const index = STATUSES.indexOf(c.status);
     if (index < 0 || index >= STATUSES.length - 1) return notify('完了済みです。');
@@ -549,10 +588,13 @@ function compressImage(file) {
   });
 }
 
-async function handleFiles(c, key, fileList) {
+async function handleFiles(c, key, fileList, { group, focusTarget = '' } = {}) {
   if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && ownsCase(c)))) return notify('写真を追加する権限がありません。');
   const files = Array.from(fileList || []).slice(0, 6);
   if (!files.length) return;
+  if (group?.dataset.photoPending === 'true') return;
+  const wasOpen = group?.querySelector('.photoPicker')?.open === true;
+  setPhotoGroupPending(group, true, `${files.length}枚をアップロード中…`);
   try {
     const images = await Promise.all(files.map(async file => ({ file, source:await compressImage(file) })));
     const added = [];
@@ -569,16 +611,24 @@ async function handleFiles(c, key, fileList) {
       await dataAccess.cases.update(c.id, { status:'写真登録', workflowHistory }, { auditDetail:'施工後写真を登録し、写真登録工程へ更新' });
     }
     await persist(`${added.length}枚の写真を追加しました。`);
-    openDetail(c.id);
+    refreshPhotoGroup(c, key, { open:wasOpen, focusTarget });
   } catch (error) { await handleDataError(error, { reloadOnConflict:false }); }
+  finally { if (group?.isConnected) setPhotoGroupPending(group, false); }
 }
 
-async function deletePhoto(c, key, index) {
+async function deletePhoto(c, key, index, button) {
   if (!(can(sessionRole, 'photos') || (can(sessionRole, 'photosOwn') && ownsCase(c)))) return notify('写真を削除する権限がありません。');
-  if (!await dataAccess.photos.remove(c.id, key, index)) return notify('写真が見つかりません。');
-  addAudit(state, c, `${PHOTO_GROUPS[key]}を1枚削除`);
-  await persist('写真を削除しました。');
-  openDetail(c.id);
+  if (!confirm('この写真を削除しますか？')) return;
+  const group = button?.closest('.photoGroup');
+  if (group?.dataset.photoPending === 'true') return;
+  const wasOpen = group?.querySelector('.photoPicker')?.open === true;
+  setPhotoGroupPending(group, true, '写真を削除中…');
+  try {
+    if (!await dataAccess.photos.remove(c.id, key, index)) return notify('写真が見つかりません。');
+    addAudit(state, c, `${PHOTO_GROUPS[key]}を1枚削除`);
+    await persist('写真を削除しました。');
+    refreshPhotoGroup(c, key, { open:wasOpen });
+  } finally { if (group?.isConnected) setPhotoGroupPending(group, false); }
 }
 
 function openCaseModal(c) {
@@ -590,7 +640,7 @@ function openCaseModal(c) {
   form.elements.id.value = c?.id || '';
   const source = c || createCase();
   editingCaseSnapshot = c ? clone(c) : null;
-  ['property','room','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
+  ['property','room','residentName','residentPhone','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
   populateCasePropertySelect(source, !c);
   populateCaseRoomSelect(source);
   populateAssignmentSelect(form.elements.surveyStaffId, 'canSurvey', source.surveyStaffId, source.surveyStaff);
@@ -623,8 +673,10 @@ async function saveCaseForm(event) {
   if (!selectedProperty) return notify('物件を選択してください。');
   const selectedRoom = roomById(data.get('roomId'));
   if (!selectedRoom || selectedRoom.propertyId !== selectedProperty.id) return notify('部屋を選択してください。');
-  const keys = ['property','room','address','owner','status','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','nextActionOverride','note'];
+  const keys = ['property','room','residentName','residentPhone','address','owner','status','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','nextActionOverride','note'];
   const values = Object.fromEntries(keys.map(key => [key, data.get(key) || '']));
+  values.residentName = values.residentName.trim();
+  values.residentPhone = values.residentPhone.trim();
   values.propertyId = selectedProperty.id;
   values.property = selectedProperty.name;
   values.roomId = selectedRoom.id;
@@ -671,6 +723,8 @@ async function saveCaseForm(event) {
       addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey)).entry);
       addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work)).entry);
       auditChanges(state, before, c);
+      if (before.residentName !== c.residentName) addAudit(state, c, '入居者名を更新');
+      if (before.residentPhone !== c.residentPhone) addAudit(state, c, '電話番号を更新');
       if (before.roomId !== c.roomId) addAudit(state, c, `部屋マスタ紐付けを ${roomById(before.roomId)?.roomNumber || before.room || '未定'} → ${selectedRoom.roomNumber} に変更`);
     }
     if (ignoredConflicts.length) {
@@ -891,7 +945,7 @@ async function createResidentResponse(form, fixedCase = null, token = '') {
     response.caseId = c.id;
     response.propertyId = c.propertyId || response.propertyId;
     response.roomId = c.roomId || response.roomId;
-    await dataAccess.cases.update(c.id, { residentResponseId:response.id, residentName:response.name || c.residentName, note:c.note.replace('／入居者回答待ち','').replace('入居者回答待ち','').trim() });
+    await dataAccess.cases.update(c.id, { residentResponseId:response.id, residentName:response.name || c.residentName, residentPhone:response.phone || c.residentPhone, note:c.note.replace('／入居者回答待ち','').replace('入居者回答待ち','').trim() });
     addAudit(state, c, '入居者回答を受信し、希望日時を案件へ反映', '入居者');
   } else {
     addAudit(state, { property:response.property, room:response.room }, '入居者回答を受信（対象案件なし）', '入居者');
@@ -1162,6 +1216,11 @@ function updateRoleUi(role) {
   $('resetDemo').classList.toggle('role-hidden', worker || dataAccess.isRemote);
 }
 
+function setSessionMenu(open) {
+  $('sessionMenuButton').setAttribute('aria-expanded', String(open));
+  document.querySelector('.session-user').classList.toggle('menu-open', open);
+}
+
 async function activateSession(session) {
   if (!session || !['admin','office','worker'].includes(session.role) || (!formalAuthMode && !USERS.includes(session.user))) return showLogin();
   sessionUser = session.user;
@@ -1186,6 +1245,7 @@ async function activateSession(session) {
   $('staffAdminButton').classList.toggle('hidden', !can(session.role, 'manageStaff'));
   $('propertyButton').classList.toggle('hidden', session.role === 'worker');
   $('propertyButton').textContent = can(session.role, 'manageProperties') ? '物件管理' : '物件情報';
+  setSessionMenu(false);
   updateRoleUi(session.role);
   hideDataSourceStatus();
   $('loginView').classList.add('hidden');
@@ -1538,7 +1598,7 @@ function closePropertyDetail() { $('propertyDetailModal').classList.add('hidden'
 async function init() {
   if (!formalAuthMode) await ensureCredentials();
   ensurePhase2Ui();
-  if (dataAccess.isRemote) document.querySelector('.foot').textContent = '※共有APIモードです。写真はメタデータのみ扱います。';
+  if (dataAccess.isRemote) document.querySelector('.foot').textContent = '※入力内容と写真は関係者間で共有されます。';
   if (!formalAuthMode) populateSelect($('loginUser'), USERS);
   if (formalAuthMode) {
     $('passwordForm').elements.newPassword.minLength = 10;
@@ -1548,6 +1608,10 @@ async function init() {
   setDefaultResponseDates();
   $('loginForm').addEventListener('submit', handleLogin);
   $('logoutButton').addEventListener('click', () => runUiAction(async () => { addAudit(state, {}, 'ログアウト'); await persist(); loadGate.invalidate(); if (formalAuthMode) await remoteAuthController.logout(); else clearSession(); showLogin(); }));
+  $('sessionMenuButton').addEventListener('click', () => setSessionMenu($('sessionMenuButton').getAttribute('aria-expanded') !== 'true'));
+  $('sessionActions').addEventListener('click', event => { if (event.target.closest('button')) setSessionMenu(false); });
+  document.addEventListener('click', event => { if (!event.target.closest('.session-user')) setSessionMenu(false); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') setSessionMenu(false); });
   $('passwordButton').addEventListener('click', openPasswordModal);
   $('closePasswordModal').addEventListener('click', closePasswordModal);
   $('passwordModal').addEventListener('click', event => { if (event.target === $('passwordModal')) closePasswordModal(); });

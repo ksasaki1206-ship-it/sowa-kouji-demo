@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -59,6 +59,16 @@ test('login試行制限migrationはraw identifierを保存せず共有lockを保
   assert.doesNotMatch(sql, /login_id|email|password/i);
 });
 
+test('案件入居者電話番号migrationはadditiveで既存案件を空文字互換にする', async () => {
+  const migrationsDirectory = resolve(backendRoot, 'db', 'migrations');
+  const migrationNames = (await readdir(migrationsDirectory)).filter(name => name.endsWith('.sql')).sort();
+  assert.deepEqual(migrationNames, ['001_initial_schema.sql','002_auth_users.sql','003_auth_login_protection.sql','004_case_resident_phone.sql']);
+  const sql = await readFile(resolve(migrationsDirectory, '004_case_resident_phone.sql'), 'utf8');
+  assert.match(sql, /ALTER TABLE cases/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS resident_phone text NOT NULL DEFAULT ''/);
+  assert.doesNotMatch(sql, /DROP|DELETE|TRUNCATE/i);
+});
+
 test('PostgreSQL login lock queryは日時parameterをtimestamptzへ明示変換する', async () => {
   let captured;
   const fakePool = {
@@ -100,7 +110,7 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     await target.rooms.create({ id:'room-001', propertyId:'property-001', roomNumber:'101号室', normalizedRoomNumber:'101', active:true, commonNote:'共通備考', version:1 });
     await target.staff.create({ id:'staff-worker-a', name:'職人A', loginUserId:'worker-a', canSurvey:true, canWork:true, active:true, type:'worker', version:1 });
     await target.cases.create({
-      id:'case-001', propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', residentName:'山田様', status:'施工予定',
+      id:'case-001', propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室', residentName:'山田様', residentPhone:'03-0000-0000', status:'施工予定',
       lifecycleStatus:'active', isArchived:false, surveyStaffId:'', workStaffId:'staff-worker-a', surveyAt:'2026-09-02T10:00', workAt:'2026-09-10T09:00',
       materialOrderedAt:'2026-09-01', materialDeliveryAt:'2026-09-08', materialReceivedAt:'', estimateAmount:385000,
       residentAccessToken:'postgres-resident-token', residentAccessEnabled:true,
@@ -154,6 +164,8 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     assert.equal(room.commonNote, '共通備考');
     const item = await provider.cases.get('case-001');
     assert.equal(item.estimateAmount, 385000);
+    assert.equal(item.residentName, '山田様');
+    assert.equal(item.residentPhone, '03-0000-0000');
     assert.equal(item.workflowHistory.length, 1);
     assert.equal(item.scheduleHistory.length, 1);
   });
@@ -205,6 +217,9 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
     await provider.cases.update('case-001', { status:'施工予定' }, { expectedVersion:reopened.version });
     const accepted = await service.createPublicResponse('postgres-resident-token', { name:'山田太郎', phone:'000-0000-0000', d1:'2026-09-15', t1:'午前', d2:'2026-09-16', t2:'午後', note:'連絡事項' });
     assert.equal(accepted.accepted, true);
+    const reflectedCase = await provider.cases.get('case-001');
+    assert.equal(reflectedCase.residentName, '山田太郎');
+    assert.equal(reflectedCase.residentPhone, '000-0000-0000');
     await service.createPhoto('case-001', { group:'after', source:'data:image/jpeg;base64,/9j/2Q==', name:'after.jpg', mimeType:'image/jpeg', size:1234 }, worker);
     const persistedPhoto = (await provider.photos.list()).find(photo => photo.name === 'after.jpg');
     assert.equal(persistedPhoto.storageProvider, 'memory');
@@ -221,6 +236,7 @@ test('PostgreSQL CRUD・競合・transaction・再起動永続化', { skip:integ
   userStore = createPostgresUserStore({ pool });
   await t.test('provider再生成後も全データが残る', async () => {
     const item = await provider.cases.get('case-001');
+    assert.equal(item.residentPhone, '000-0000-0000');
     assert.equal(item.workflowHistory.some(entry => entry.step === 'complete'), true);
     assert.equal(item.scheduleHistory.some(entry => entry.id === 'schedule-2'), true);
     assert.equal((await provider.responses.list()).length, 1);
