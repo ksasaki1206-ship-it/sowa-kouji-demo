@@ -10,7 +10,7 @@
   <meta name="sowa-api-auth-mode" content="identity">
   <meta name="sowa-api-timeout-ms" content="12000">
   <title>総和 工事進捗管理（試用版）</title>
-  <link rel="stylesheet" href="assets/css/styles.css?v=20260902-28">
+  <link rel="stylesheet" href="assets/css/styles.css?v=20260902-29">
 </head>
 <body>
   <main id="trialLoading" class="login-shell">
@@ -32,7 +32,7 @@
       resetButton.classList.add('hidden');
       resetButton.setAttribute('aria-hidden', 'true');
 
-      await import('./assets/js/bootstrap.js?v=20260902-28');
+      await import('./assets/js/bootstrap.js?v=20260902-29');
     } catch (error) {
       console.error('工事進捗管理を読み込めませんでした。', error);
       document.getElementById('trialLoading').innerHTML = '<div class="login-card"><h1>画面を読み込めませんでした</h1><p class="muted">時間をおいて再読み込みしてください。</p></div>';

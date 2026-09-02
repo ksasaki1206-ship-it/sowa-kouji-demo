@@ -438,9 +438,12 @@ function openDetail(id) {
   currentCaseId = id;
   const alerts = getCaseAlerts(state, c);
   const active = isOperationalCase(c);
+  const canEditCase = active && can(sessionRole, 'edit');
+  const editAriaLabel = esc(`${c.property} ${c.room}の案件を編集`);
   const lifecycleBadges = `${isCancelledCase(c) ? '<span class="badge cancelled-badge">取消</span>' : ''}${isArchivedCase(c) ? '<span class="badge inactive-badge">アーカイブ</span>' : ''}`;
   $('detailCard').innerHTML = `
-    <section class="card detail-card"><div class="caseHead"><div><div class="big">${esc(c.property)} ${esc(c.room)}</div></div><div class="case-badges"><span class="badge" data-case-status>${esc(c.status)}</span>${lifecycleBadges}</div></div><div class="kv"><div><div class="lab">入居者名</div><div class="val">${esc(c.residentName || '未登録')}</div></div><div><div class="lab">電話番号</div><div class="val">${esc(c.residentPhone || '未登録')}</div></div><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
+    ${canEditCase ? `<div class="detail-edit-sticky"><button id="editCaseSticky" class="btn primary case-edit-trigger" type="button" aria-label="${editAriaLabel}">案件編集</button></div>` : ''}
+    <section class="card detail-card"><div class="caseHead detail-title-row"><div class="detail-title-copy"><div class="big">${esc(c.property)} ${esc(c.room)}</div></div><div class="case-badges"><span class="badge" data-case-status>${esc(c.status)}</span>${lifecycleBadges}</div>${canEditCase ? `<button id="editCaseTop" class="btn primary detail-edit-mobile case-edit-trigger" type="button" aria-label="${editAriaLabel}">編集</button>` : ''}</div><div class="kv"><div><div class="lab">入居者名</div><div class="val">${esc(c.residentName || '未登録')}</div></div><div><div class="lab">電話番号</div><div class="val">${esc(c.residentPhone || '未登録')}</div></div><div><div class="lab">住所</div><div class="val">${esc(c.address || '-')}</div></div><div><div class="lab">管理会社 / オーナー</div><div class="val">${esc(c.owner || '-')}</div></div></div></section>
     ${lifecycleStatusHtml(c)}
     <section class="card detail-card action-card"><div class="lab">次のアクション</div><div class="big">${esc(nextAction(c))}</div>${alerts.length ? `<div class="detail-alerts">${alerts.map(alert => `<span class="badge alert-badge">${esc(alert.label)}</span>`).join('')}</div>` : '<div class="muted">現在、要対応アラートはありません。</div>'}</section>
     <section class="card detail-card"><h2 class="section-title">入居者回答</h2>${answerHtml(c)}</section>
@@ -448,7 +451,7 @@ function openDetail(id) {
     <section class="card detail-card"><h2 class="section-title">見積 / 受注</h2><div class="kv"><div><div class="lab">見積金額</div><div class="val money">${esc(fmtMoney(c.estimateAmount))}</div></div><div><div class="lab">現在ステータス</div><div class="val">${esc(c.status)}</div></div></div></section>
     <section class="card detail-card"><h2 class="section-title">材料</h2><div class="material-grid"><div><div class="lab">材料発注日</div><div class="val">${esc(fmtDate(c.materialOrderedAt))}</div></div><div><div class="lab">納品予定</div><div class="val">${esc(fmtDate(c.materialDeliveryAt))}</div></div><div><div class="lab">納品確認</div><div class="val">${esc(fmtDate(c.materialReceivedAt))}</div></div><div><div class="lab">仕入先</div><div class="val">${esc(c.supplier || '未定')}</div></div></div><div class="material-note"><span class="lab">材料メモ</span><div>${esc(c.materialNote || 'なし')}</div></div></section>
     <section class="card detail-card"><div class="section-head"><h2 class="section-title">工事</h2>${active && can(sessionRole, 'manageLifecycle') && c.workAt ? '<button class="btn postpone-schedule" data-type="work" type="button">工事を延期</button>' : ''}</div><div class="kv"><div><div class="lab">工事担当</div><div class="val">${esc(c.workStaff)}</div></div><div><div class="lab">施工予定時間</div><div class="val">${esc(formatPlan(c.workAt, c.workDurationMinutes))}</div></div></div><div class="gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
-    <div class="actions">${active ? '<button id="advance" class="btn primary">次の工程へ</button><button id="editCase" class="btn">案件編集</button>' : ''}${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}<button id="copyCaseLink" class="btn" type="button">案件リンクをコピー</button><button id="showResidentQr" class="btn" type="button">入居者用QR</button>${lifecycleActionsHtml(c)}</div>
+    <div class="actions">${active ? '<button id="advance" class="btn primary">次の工程へ</button>' : ''}${canEditCase ? `<button id="editCase" class="btn case-edit-trigger" type="button" aria-label="${editAriaLabel}">案件編集</button>` : ''}${c.propertyId ? '<button id="viewCaseProperty" class="btn">物件情報</button>' : ''}<button id="copyCaseLink" class="btn" type="button">案件リンクをコピー</button><button id="showResidentQr" class="btn" type="button">入居者用QR</button>${lifecycleActionsHtml(c)}</div>
     <section class="card detail-card"><h2 class="section-title">備考</h2><div>${esc(c.note || 'なし')}</div></section>
     <section class="card detail-card"><h2 class="section-title">工程タイムライン</h2>${workflowTimelineHtml(c)}</section>
     <section class="card detail-card"><h2 class="section-title">予定変更・案件履歴</h2>${scheduleHistoryHtml(c)}</section>
@@ -558,7 +561,7 @@ function wireDetail(c) {
     const targetStatus = STATUSES[index + 1];
     return requestPhotoCheckedAction(c, targetStatus, () => runUiAction(() => advanceCase(c, targetStatus)));
   }, '保存中…')));
-  $('editCase')?.addEventListener('click', () => openCaseModal(c));
+  $('detailCard').querySelectorAll('.case-edit-trigger').forEach(button => button.addEventListener('click', () => openCaseModal(c)));
   $('viewCaseProperty')?.addEventListener('click', () => openPropertyDetail(c.propertyId));
   $('copyCaseLink')?.addEventListener('click', () => copyText(buildCaseUrl(location.href, c.id), '案件リンクをコピーしました。'));
   $('showResidentQr')?.addEventListener('click', () => openResidentQr(c.id));
