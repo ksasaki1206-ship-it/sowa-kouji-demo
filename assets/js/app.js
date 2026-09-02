@@ -345,7 +345,14 @@ function answerHtml(c) {
 
 function photoGroupHtml(c, key, label) {
   const photos = dataAccess.photos.list(c.id, key);
-  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><label class="uploadLabel">＋ 写真を追加<input class="photoInput" type="file" accept="image/*" capture="environment" multiple data-key="${key}"></label><div class="hint">最大6枚ずつ追加、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${esc(photo.source)}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || 'metadata')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+  const cameraInputId = `photo-camera-${key}`;
+  const libraryInputId = `photo-library-${key}`;
+  return `<div class="photoGroup"><div class="photo-title"><b>${esc(label)}</b><span class="badge">${photos.length}枚</span></div><details class="photoPicker"><summary class="uploadLabel">＋ 写真を追加</summary><div class="photoActions" role="group" aria-label="${esc(label)}の写真追加方法"><button class="btn photoChoice photoTrigger" type="button" data-target="${cameraInputId}" aria-label="${esc(label)}をカメラで撮影する">撮影する</button><button class="btn photoChoice photoTrigger" type="button" data-target="${libraryInputId}" aria-label="${esc(label)}を端末から選ぶ">写真を選ぶ</button><input id="${cameraInputId}" class="photoInput" type="file" accept="image/*" capture="environment" data-key="${key}" hidden><input id="${libraryInputId}" class="photoInput" type="file" accept="image/*" multiple data-key="${key}" hidden></div></details><div class="hint">1回最大6枚、各分類8枚まで保存します。</div><div class="photoGrid">${photos.map((photo, index) => `<div class="thumb">${photo.source ? `<img src="${esc(photo.source)}" alt="${esc(photo.name || `${label} ${index + 1}`)}">` : `<div class="photo-metadata-placeholder" aria-label="${esc(photo.name || `${label} ${index + 1}`)}">共有写真<br><small>${esc(photo.name || 'metadata')}</small></div>`}<button class="del" type="button" aria-label="${esc(label)} ${index + 1}を削除" data-key="${key}" data-index="${index}">×</button></div>`).join('')}</div></div>`;
+}
+
+function wirePhotoInputs(c, root = document) {
+  root.querySelectorAll('.photoTrigger').forEach(button => button.addEventListener('click', () => $(button.dataset.target)?.click()));
+  root.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => runUiAction(() => handleFiles(c, input.dataset.key, event.target.files))));
 }
 
 function caseHistoryHtml(c) {
@@ -371,7 +378,7 @@ function openWorkerDetail(c) {
     <section class="card detail-card"><h2 class="section-title">必要写真</h2><div class="worker-photo-status">${['before','during','after'].map(key => `<span class="${c.photos[key].length ? 'ok' : 'missing'}">${esc(PHOTO_GROUPS[key])} ${c.photos[key].length}枚</span>`).join('')}</div><div class="gallery worker-gallery">${photoGroupHtml(c,'before',PHOTO_GROUPS.before)}${photoGroupHtml(c,'during',PHOTO_GROUPS.during)}${photoGroupHtml(c,'after',PHOTO_GROUPS.after)}</div></section>
     ${workAssigned ? '<button id="workerCompleteButton" class="btn primary worker-complete" type="button">作業完了報告</button>' : ''}
     <section class="card detail-card"><h2 class="section-title">工程</h2>${workflowTimelineHtml(c)}</section>`;
-  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => runUiAction(() => handleFiles(c, input.dataset.key, event.target.files))));
+  wirePhotoInputs(c, $('detailCard'));
   document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index)))));
   $('workerCompleteButton')?.addEventListener('click', () => openWorkerCompletion(c));
   show('detail');
@@ -500,7 +507,7 @@ async function restoreArchived(c) {
 }
 
 function wireDetail(c) {
-  document.querySelectorAll('.photoInput').forEach(input => input.addEventListener('change', event => runUiAction(() => handleFiles(c, input.dataset.key, event.target.files))));
+  wirePhotoInputs(c, $('detailCard'));
   document.querySelectorAll('.del').forEach(button => button.addEventListener('click', () => runUiAction(() => deletePhoto(c, button.dataset.key, Number(button.dataset.index)))));
   $('advance')?.addEventListener('click', event => runUiAction(() => runWithPending(event.currentTarget, async () => {
     const index = STATUSES.indexOf(c.status);
