@@ -3,7 +3,7 @@ import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } fr
 import { createApplicationStore } from './application-store.js?v=20260902-25';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
-import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-22';
+import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260902-32';
 import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, casePrefillForRoom, caseDraftForCreatedRoom, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260902-31';
 import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-22';
 import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-22';

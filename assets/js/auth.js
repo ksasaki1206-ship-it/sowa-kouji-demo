@@ -17,7 +17,7 @@ export const USERS = USER_DEFINITIONS.map(user => user.name);
 
 export const ROLE_DEFINITIONS = Object.freeze({
   admin: { label:'管理者', capabilities:['view','edit','schedule','responses','history','photos','create','manageUsers','manageStaff','manageProperties','manageRooms','manageLifecycle','restoreLifecycle','manageResidentAccess','regenerateResidentAccess'] },
-  office: { label:'事務所', capabilities:['view','edit','schedule','responses','history','photos','create','manageLifecycle','manageResidentAccess'] },
+  office: { label:'事務所', capabilities:['view','edit','schedule','responses','history','photos','create','manageRooms','manageLifecycle','manageResidentAccess'] },
   worker: { label:'職人', capabilities:['viewOwn','photosOwn','completeOwn'], futureRestricted:false }
 });
 

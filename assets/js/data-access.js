@@ -2,7 +2,7 @@ import { createApiClient } from './api-client.js?v=20260901-22';
 import { readDataSourceConfig } from './data-source-config.js?v=20260901-22';
 import { createHttpDataProvider } from './http-data-provider.js?v=20260902-25';
 import { createLocalDataProvider } from './local-data-provider.js?v=20260901-22';
-import { getSession } from './auth.js?v=20260901-22';
+import { getSession } from './auth.js?v=20260902-32';
 import { createBrowserIdentityClient } from './identity-client.js?v=20260902-24';
 import { createRemoteAuthController } from './remote-auth.js?v=20260902-24';
 

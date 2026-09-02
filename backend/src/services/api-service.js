@@ -77,6 +77,9 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
     if (!store) throw notFoundError('リソースが見つかりません。');
     return store;
   };
+  const requireMasterWriteRole = (name, user) => name === 'rooms'
+    ? requireRole(user, 'admin', 'office')
+    : requireRole(user, 'admin');
 
   return Object.freeze({
     health() {
@@ -142,7 +145,7 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
       return item;
     },
     async createMaster(name, body, user) {
-      requireRole(user, 'admin');
+      requireMasterWriteRole(name, user);
       return inTransaction(async tx => {
         const prefixes = { properties:'property', rooms:'room', staff:'staff' };
         const safeBody = safeBusinessFields(body);
@@ -160,7 +163,7 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
       });
     },
     async updateMaster(name, id, body, user) {
-      requireRole(user, 'admin');
+      requireMasterWriteRole(name, user);
       return inTransaction(async tx => {
         if (!tx[name]) throw notFoundError('リソースが見つかりません。');
         if (name === 'rooms' && body?.propertyId && !await tx.properties.get(body.propertyId)) throw validationError('指定された物件が存在しません。', { field:'propertyId' });

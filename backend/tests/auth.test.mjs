@@ -117,6 +117,8 @@ test('admin user管理・role/staffId認可', async t => {
     assert.equal((await request('/api/v1/users', { idToken:admin.idToken })).response.status, 200);
     assert.equal((await request('/api/v1/users', { idToken:office.idToken })).response.status, 403);
     assert.equal((await request('/api/v1/users', { idToken:worker.idToken })).response.status, 403);
+    assert.equal((await request('/api/v1/users', { method:'POST', idToken:office.idToken, body:{ loginId:'office-forbidden', displayName:'作成禁止', role:'office', password:RESET_PASSWORD } })).response.status, 403);
+    assert.equal((await request('/api/v1/users/auth-worker/password-reset', { method:'POST', idToken:office.idToken, body:{ version:1, newPassword:RESET_PASSWORD } })).response.status, 403);
   });
 
   await t.test('email nullableのuserを作成しduplicate loginId/emailを拒否する', async () => {

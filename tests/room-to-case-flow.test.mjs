@@ -91,8 +91,8 @@ test('local・staging・trialは同じ修正済みFrontend資産を使う', asyn
   assert.match(staging, /name="sowa-api-auth-mode" content="identity"/);
   assert.match(trial, /name="sowa-api-auth-mode" content="identity"/);
   for (const html of [index, staging, trial]) {
-    assert.match(html, /assets\/css\/styles\.css\?v=20260902-31/);
-    assert.match(html, /assets\/js\/bootstrap\.js\?v=20260902-31/);
+    assert.match(html, /assets\/css\/styles\.css\?v=20260902-32/);
+    assert.match(html, /assets\/js\/bootstrap\.js\?v=20260902-32/);
   }
-  assert.match(bootstrap, /\.\/app\.js\?v=20260902-31/);
+  assert.match(bootstrap, /\.\/app\.js\?v=20260902-32/);
 });

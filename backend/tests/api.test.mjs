@@ -88,6 +88,48 @@ test('401 and role based 403', async () => {
   assert.equal(forbidden.payload.error.code, 'FORBIDDEN');
 });
 
+test('officeは部屋の日常管理だけを行え、property・staff管理とworkerの部屋管理は拒否される', async () => {
+  const roomList = await request('/api/v1/rooms', { user:'office' });
+  assert.equal(roomList.response.status, 200);
+
+  const createdRoom = await request('/api/v1/rooms', {
+    method:'POST', user:'office', body:{ propertyId:'property-001', roomNumber:'office追加室', normalizedRoomNumber:'office追加室' }
+  });
+  assert.equal(createdRoom.response.status, 201);
+  assert.equal(createdRoom.payload.data.active, true);
+
+  const deactivatedRoom = await request(`/api/v1/rooms/${createdRoom.payload.data.id}`, {
+    method:'PATCH', user:'office', body:{ version:1, active:false }
+  });
+  assert.equal(deactivatedRoom.response.status, 200);
+  assert.equal(deactivatedRoom.payload.data.active, false);
+
+  const updatedRoom = await request(`/api/v1/rooms/${createdRoom.payload.data.id}`, {
+    method:'PATCH', user:'office', body:{ version:2, roomNumber:'office更新室', active:true }
+  });
+  assert.equal(updatedRoom.response.status, 200);
+  assert.equal(updatedRoom.payload.data.roomNumber, 'office更新室');
+  assert.equal(updatedRoom.payload.data.active, true);
+
+  const createdCase = await request('/api/v1/cases', {
+    method:'POST', user:'office', body:{ propertyId:'property-001', roomId:createdRoom.payload.data.id, property:'○○マンション', room:'office更新室', status:'問い合わせ' }
+  });
+  assert.equal(createdCase.response.status, 201);
+  assert.equal(createdCase.payload.data.roomId, createdRoom.payload.data.id);
+
+  for (const result of [
+    await request('/api/v1/properties', { method:'POST', user:'office', body:{ name:'office禁止物件' } }),
+    await request('/api/v1/properties/property-001', { method:'PATCH', user:'office', body:{ version:1, name:'変更禁止' } }),
+    await request('/api/v1/staff', { method:'POST', user:'office', body:{ name:'office禁止担当者' } }),
+    await request('/api/v1/staff/staff-worker-a', { method:'PATCH', user:'office', body:{ version:1, active:false } }),
+    await request('/api/v1/rooms', { method:'POST', user:'worker-a', body:{ propertyId:'property-001', roomNumber:'worker禁止室' } }),
+    await request('/api/v1/rooms/room-001', { method:'PATCH', user:'worker-a', body:{ version:1, active:false } })
+  ]) {
+    assert.equal(result.response.status, 403);
+    assert.equal(result.payload.error.code, 'FORBIDDEN');
+  }
+});
+
 test('office can cancel but only admin can restore lifecycle', async () => {
   const created = await request('/api/v1/cases', { method:'POST', user:'nishiyama', body:{ propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'権限確認室', status:'問い合わせ' } });
   const cancelled = await request(`/api/v1/cases/${created.payload.data.id}`, { method:'PATCH', user:'office', body:{ version:1, lifecycleStatus:'cancelled' } });

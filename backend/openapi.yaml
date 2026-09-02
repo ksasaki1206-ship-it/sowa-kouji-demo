@@ -222,7 +222,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/List' }
     post:
-      summary: 部屋登録（admin）
+      summary: 部屋登録（admin / office）
       requestBody: { $ref: '#/components/requestBodies/JsonBody' }
       responses:
         '201': { $ref: '#/components/responses/Success' }
@@ -235,10 +235,11 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Success' }
     patch:
-      summary: 部屋更新・active切替（admin、version必須）
+      summary: 部屋更新・active切替（admin / office、version必須）
       requestBody: { $ref: '#/components/requestBodies/VersionedJsonBody' }
       responses:
         '200': { $ref: '#/components/responses/Success' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
   /staff:
     get:
