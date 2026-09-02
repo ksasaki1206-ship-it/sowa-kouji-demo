@@ -130,6 +130,84 @@ test('officeは部屋の日常管理だけを行え、property・staff管理とw
   }
 });
 
+test('adminとofficeは案件保存時だけroom draftをatomicに確定し、重複とrollbackを安全に扱う', async () => {
+  const beforeRooms = await request('/api/v1/rooms', { user:'office' });
+  const beforeCount = beforeRooms.payload.meta.count;
+  const officeDraft = { propertyId:'property-001', roomNumber:'draft 810号室', normalizedRoomNumber:'draft810' };
+  const created = await request('/api/v1/cases', {
+    method:'POST', user:'office', body:{
+      id:'case-room-draft-office', propertyId:'property-001', roomId:'', roomDraft:officeDraft,
+      property:'○○マンション', room:'draft 810号室', residentName:'', residentPhone:'', note:'', status:'問い合わせ'
+    }
+  });
+  assert.equal(created.response.status, 201);
+  assert.ok(created.payload.data.roomId);
+  assert.equal(created.payload.data.room, 'draft 810号室');
+  assert.equal(Object.hasOwn(created.payload.data, 'roomDraft'), false);
+
+  const afterCreateRooms = await request('/api/v1/rooms', { user:'office' });
+  assert.equal(afterCreateRooms.payload.meta.count, beforeCount + 1);
+  assert.equal(afterCreateRooms.payload.data.filter(room => room.propertyId === 'property-001' && room.roomNumber === 'draft 810号室').length, 1);
+
+  const duplicateDraft = await request('/api/v1/cases', {
+    method:'POST', user:'nishiyama', body:{
+      id:'case-room-draft-admin', propertyId:'property-001', roomId:'', roomDraft:{ ...officeDraft, roomNumber:'draft 810 号室' },
+      property:'○○マンション', room:'draft 810 号室', status:'問い合わせ'
+    }
+  });
+  assert.equal(duplicateDraft.response.status, 201);
+  assert.equal(duplicateDraft.payload.data.roomId, created.payload.data.roomId);
+  const afterDuplicateRooms = await request('/api/v1/rooms', { user:'office' });
+  assert.equal(afterDuplicateRooms.payload.meta.count, beforeCount + 1);
+
+  const updated = await request('/api/v1/cases/case-room-draft-office', {
+    method:'PATCH', user:'nishiyama', body:{
+      version:1, propertyId:'property-001', roomId:'',
+      roomDraft:{ propertyId:'property-001', roomNumber:'draft 811号室' },
+      residentName:'', residentPhone:'', note:''
+    }
+  });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.payload.data.room, 'draft 811号室');
+  assert.equal(updated.payload.data.residentName, '');
+  assert.equal(updated.payload.data.residentPhone, '');
+  assert.equal(updated.payload.data.note, '');
+
+  const beforeRollbackRooms = await request('/api/v1/rooms', { user:'office' });
+  const failed = await request('/api/v1/cases', {
+    method:'POST', user:'office', body:{
+      id:'case-001', propertyId:'property-001', roomId:'',
+      roomDraft:{ propertyId:'property-001', roomNumber:'draft rollback号室' },
+      property:'○○マンション', room:'draft rollback号室', status:'問い合わせ'
+    }
+  });
+  assert.equal(failed.response.status, 409);
+  const afterRollbackRooms = await request('/api/v1/rooms', { user:'office' });
+  assert.equal(afterRollbackRooms.payload.meta.count, beforeRollbackRooms.payload.meta.count);
+  assert.equal(afterRollbackRooms.payload.data.some(room => room.roomNumber === 'draft rollback号室'), false);
+});
+
+test('登録済みroomへの通常変更はPIIと備考を維持し、workerのroom draftは拒否する', async () => {
+  const created = await request('/api/v1/cases', {
+    method:'POST', user:'office', body:{
+      id:'case-registered-room-change', propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'101号室',
+      residentName:'維持対象', residentPhone:'000-0000-0000', note:'維持する備考', status:'問い合わせ'
+    }
+  });
+  const updated = await request('/api/v1/cases/case-registered-room-change', {
+    method:'PATCH', user:'office', body:{ version:created.payload.data.version, propertyId:'property-001', roomId:'room-001' }
+  });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.payload.data.residentName, '維持対象');
+  assert.equal(updated.payload.data.residentPhone, '000-0000-0000');
+  assert.equal(updated.payload.data.note, '維持する備考');
+  const worker = await request('/api/v1/cases/case-001', {
+    method:'PATCH', user:'worker-a', body:{ version:1, roomDraft:{ propertyId:'property-001', roomNumber:'worker禁止draft' } }
+  });
+  assert.equal(worker.response.status, 403);
+  assert.equal(worker.payload.error.code, 'FORBIDDEN');
+});
+
 test('office can cancel but only admin can restore lifecycle', async () => {
   const created = await request('/api/v1/cases', { method:'POST', user:'nishiyama', body:{ propertyId:'property-001', roomId:'room-001', property:'○○マンション', room:'権限確認室', status:'問い合わせ' } });
   const cancelled = await request(`/api/v1/cases/${created.payload.data.id}`, { method:'PATCH', user:'office', body:{ version:1, lifecycleStatus:'cancelled' } });

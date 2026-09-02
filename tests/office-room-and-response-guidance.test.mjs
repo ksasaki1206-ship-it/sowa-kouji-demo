@@ -37,15 +37,15 @@ test('入居者回答は送信時点で予約確定ではないことをpublic�
   assert.doesNotMatch(`${index}\n${staging}\n${trial}`, /API key|private key|service account JSON/i);
 });
 
-test('local・staging・trialは同じv32 Frontend資産を読み込む', async () => {
+test('local・staging・trialは同じ更新済みFrontend資産を読み込む', async () => {
   const [index, staging, trial, bootstrap] = await Promise.all([
     read('../index.html'), read('../staging.html'), read('../trial.html'), read('../assets/js/bootstrap.js')
   ]);
   for (const entry of [index, staging, trial]) {
     assert.match(entry, /assets\/css\/styles\.css\?v=20260902-32/);
-    assert.match(entry, /assets\/js\/bootstrap\.js\?v=20260902-32/);
+    assert.match(entry, /assets\/js\/bootstrap\.js\?v=20260903-33/);
   }
-  assert.match(bootstrap, /\.\/app\.js\?v=20260902-32/);
+  assert.match(bootstrap, /\.\/app\.js\?v=20260903-33/);
   assert.match(index, /name="sowa-data-source" content="local"/);
   assert.match(staging, /name="sowa-data-source" content="http"/);
   assert.match(trial, /name="sowa-data-source" content="http"/);

@@ -64,7 +64,15 @@ export function createMemoryProvider(seed = createMockSeed()) {
     responses:new MemoryStore(seed.responses, '入居者回答'),
     audit:new MemoryStore(seed.auditLogs, '操作履歴'),
     photos:new MemoryStore(seed.photos, '写真メタデータ'),
-    async withTransaction(work) { return work(provider); },
+    async withTransaction(work) {
+      const stores = [provider.cases, provider.properties, provider.rooms, provider.staff, provider.responses, provider.audit, provider.photos];
+      const snapshots = stores.map(store => clone(store.items));
+      try { return await work(provider); }
+      catch (error) {
+        stores.forEach((store, index) => { store.items = snapshots[index]; });
+        throw error;
+      }
+    },
     async close() {}
   };
   assertStoreContract('CaseStore', provider.cases);

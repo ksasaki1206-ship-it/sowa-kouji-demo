@@ -1,10 +1,10 @@
 import { STATUSES, STAFF_TYPES, DEFAULT_DURATIONS, PHOTO_GROUPS, createCase, createProperty, createRoom, normalizePropertyName, normalizeRoomNumber, clone, todayKey, plusDays } from './data.js?v=20260901-22';
 import { dataAccess as dataProvider, dataSourceConfig, remoteAuthController } from './data-access.js?v=20260902-25';
-import { createApplicationStore } from './application-store.js?v=20260902-25';
+import { createApplicationStore } from './application-store.js?v=20260903-33';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
 import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260902-32';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, casePrefillForRoom, caseDraftForCreatedRoom, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260902-31';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, casePrefillForRoom, caseDraftForCreatedRoom, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260903-33';
 import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-22';
 import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-22';
 import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-22';
@@ -29,6 +29,8 @@ let pendingConflictAction = null;
 let pendingDuplicateAction = null;
 let lifecycleActionContext = null;
 let editingCaseSnapshot = null;
+const CASE_ROOM_DRAFT_VALUE = '__new_room_draft__';
+let pendingCaseRoomDraft = null;
 let caseListMode = 'active';
 let pendingRoute = parseAppRoute(location.href);
 let residentRouteCase = null;
@@ -104,6 +106,10 @@ function updateCasePropertyInfo(fillLegacy = false) {
 
 function updateCaseRoom() {
   const form = $('caseForm');
+  if (form.elements.roomId.value === CASE_ROOM_DRAFT_VALUE && pendingCaseRoomDraft) {
+    form.elements.room.value = pendingCaseRoomDraft.roomNumber;
+    return;
+  }
   const room = roomById(form.elements.roomId.value);
   form.elements.room.value = room?.roomNumber || '';
 }
@@ -113,12 +119,15 @@ function populateCaseRoomSelect(source = {}) {
   const propertyId = form.elements.propertyId.value;
   const selected = roomById(source.roomId) || dataAccess.rooms.getByPropertyRoom(propertyId, source.room);
   const rooms = selectableRooms(roomList(), propertyId, selected?.id || '').sort((a,b) => a.roomNumber.localeCompare(b.roomNumber, 'ja', { numeric:true }));
-  form.elements.roomId.innerHTML = '<option value="">部屋を選択</option>' + rooms.map(room => `<option value="${esc(room.id)}">${esc(room.roomNumber)}${room.active ? '' : '（無効・既存）'}</option>`).join('');
-  form.elements.roomId.value = selected && rooms.some(room => room.id === selected.id) ? selected.id : '';
+  const draft = pendingCaseRoomDraft?.propertyId === propertyId ? pendingCaseRoomDraft : null;
+  form.elements.roomId.innerHTML = '<option value="">部屋を選択</option>' + rooms.map(room => `<option value="${esc(room.id)}">${esc(room.roomNumber)}${room.active ? '' : '（無効・既存）'}</option>`).join('') + (draft ? `<option value="${CASE_ROOM_DRAFT_VALUE}">${esc(draft.roomNumber)}（未保存）</option>` : '');
+  if (selected && rooms.some(room => room.id === selected.id)) form.elements.roomId.value = selected.id;
+  else if (draft && source.roomId === CASE_ROOM_DRAFT_VALUE) form.elements.roomId.value = CASE_ROOM_DRAFT_VALUE;
+  else form.elements.roomId.value = '';
   updateCaseRoom();
 }
 
-function selectCreatedRoomForCase(room) {
+function selectDraftRoomForCase(roomDraft) {
   const form = $('caseForm');
   const draft = caseDraftForCreatedRoom({
     id:form.elements.id.value,
@@ -127,9 +136,25 @@ function selectCreatedRoomForCase(room) {
     residentName:form.elements.residentName.value,
     residentPhone:form.elements.residentPhone.value,
     note:form.elements.note.value
-  }, room);
-  populateCaseRoomSelect({ roomId:room.id, room:room.roomNumber });
+  }, { id:CASE_ROOM_DRAFT_VALUE, propertyId:roomDraft.propertyId });
+  pendingCaseRoomDraft = roomDraft;
+  populateCaseRoomSelect({ roomId:CASE_ROOM_DRAFT_VALUE, room:roomDraft.roomNumber });
   ['residentName','residentPhone','note'].forEach(key => { form.elements[key].value = draft[key]; });
+  form.elements.residentName.autocomplete = 'off';
+  form.elements.residentPhone.autocomplete = 'off';
+}
+
+function selectCaseRoom() {
+  const form = $('caseForm');
+  const selectedRoomId = form.elements.roomId.value;
+  if (selectedRoomId !== CASE_ROOM_DRAFT_VALUE && pendingCaseRoomDraft) {
+    pendingCaseRoomDraft = null;
+    form.elements.residentName.autocomplete = form.elements.id.value ? 'name' : 'off';
+    form.elements.residentPhone.autocomplete = form.elements.id.value ? 'tel' : 'off';
+    populateCaseRoomSelect({ roomId:selectedRoomId });
+    return;
+  }
+  updateCaseRoom();
 }
 
 function updateEndPreviews() {
@@ -667,6 +692,7 @@ function openCaseModal(c, prefill = {}) {
   $('modal').classList.remove('hidden');
   $('modalTitle').textContent = c ? '案件編集' : '新規案件登録';
   const form = $('caseForm');
+  pendingCaseRoomDraft = null;
   form.reset();
   form.elements.id.value = c?.id || '';
   form.elements.residentName.autocomplete = c ? 'name' : 'off';
@@ -684,7 +710,7 @@ function openCaseModal(c, prefill = {}) {
   (prefill.roomId ? form.elements.residentName : form.elements.propertyId).focus();
 }
 
-function closeCaseModal() { $('modal').classList.add('hidden'); editingCaseSnapshot = null; }
+function closeCaseModal() { $('modal').classList.add('hidden'); editingCaseSnapshot = null; pendingCaseRoomDraft = null; }
 
 function addScheduleAudit(c, entry) {
   if (!entry) return;
@@ -704,16 +730,28 @@ async function saveCaseForm(event) {
   const c = existing || createCase();
   const selectedProperty = propertyById(data.get('propertyId'));
   if (!selectedProperty) return notify('物件を選択してください。');
-  const selectedRoom = roomById(data.get('roomId'));
-  if (!selectedRoom || selectedRoom.propertyId !== selectedProperty.id) return notify('部屋を選択してください。');
+  let roomDraft = data.get('roomId') === CASE_ROOM_DRAFT_VALUE ? pendingCaseRoomDraft : null;
+  let selectedRoom = roomDraft ? null : roomById(data.get('roomId'));
+  if (roomDraft) {
+    const roomNumber = roomDraft.roomNumber.trim();
+    const normalizedRoomNumber = normalizeRoomNumber(roomNumber);
+    if (!roomNumber || !normalizedRoomNumber || roomDraft.propertyId !== selectedProperty.id) return notify('新規部屋の入力内容を確認してください。');
+    const duplicate = dataAccess.rooms.getByPropertyRoom(selectedProperty.id, roomNumber);
+    if (duplicate?.active === false) return notify('同じ部屋番号の無効な部屋が登録済みです。部屋管理で有効化してください。');
+    if (duplicate) {
+      selectedRoom = duplicate;
+      roomDraft = null;
+    } else roomDraft = { propertyId:selectedProperty.id, roomNumber, normalizedRoomNumber };
+  }
+  if (!roomDraft && (!selectedRoom || selectedRoom.propertyId !== selectedProperty.id)) return notify('部屋を選択してください。');
   const keys = ['property','room','residentName','residentPhone','address','owner','status','surveyAt','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','nextActionOverride','note'];
   const values = Object.fromEntries(keys.map(key => [key, data.get(key) || '']));
   values.residentName = values.residentName.trim();
   values.residentPhone = values.residentPhone.trim();
   values.propertyId = selectedProperty.id;
   values.property = selectedProperty.name;
-  values.roomId = selectedRoom.id;
-  values.room = selectedRoom.roomNumber;
+  values.roomId = selectedRoom?.id || '';
+  values.room = selectedRoom?.roomNumber || roomDraft.roomNumber;
   values.estimateAmount = Number(data.get('estimateAmount') || 0);
   values.surveyDurationMinutes = Math.max(15, Number(data.get('surveyDurationMinutes') || DEFAULT_DURATIONS.survey));
   values.workDurationMinutes = Math.max(15, Number(data.get('workDurationMinutes') || DEFAULT_DURATIONS.work));
@@ -747,18 +785,18 @@ async function saveCaseForm(event) {
     if (!existing) {
       Object.assign(c, caseValues);
       recordWorkflowStep(c, '問い合わせ', sessionUser);
-      await dataAccess.cases.create(c, { auditDetail:'案件を新規登録' });
+      await dataAccess.cases.create(c, { auditDetail:'案件を新規登録', roomDraft });
       addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey)).entry);
       addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work)).entry);
       addAudit(state, c, '案件を新規登録');
     } else {
-      await dataAccess.cases.update(c.id, caseValues, { auditDetail:'案件情報を編集' });
+      await dataAccess.cases.update(c.id, caseValues, { auditDetail:'案件情報を編集', roomDraft });
       addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'survey', scheduleChanges.survey)).entry);
       addScheduleAudit(c, (await dataAccess.lifecycle.changeSchedule(c.id, 'work', scheduleChanges.work)).entry);
       auditChanges(state, before, c);
       if (before.residentName !== c.residentName) addAudit(state, c, '入居者名を更新');
       if (before.residentPhone !== c.residentPhone) addAudit(state, c, '電話番号を更新');
-      if (before.roomId !== c.roomId) addAudit(state, c, `部屋マスタ紐付けを ${roomById(before.roomId)?.roomNumber || before.room || '未定'} → ${selectedRoom.roomNumber} に変更`);
+      if (before.roomId !== c.roomId) addAudit(state, c, `部屋マスタ紐付けを ${roomById(before.roomId)?.roomNumber || before.room || '未定'} → ${c.room} に変更`);
     }
     if (ignoredConflicts.length) {
       const labels = [...new Set(ignoredConflicts.map(conflict => conflict.candidate.label))].join('・');
@@ -1695,10 +1733,10 @@ async function init() {
   $('clearPropertyForm').addEventListener('click', resetPropertyForm);
   $('closePropertyDetail').addEventListener('click', closePropertyDetail);
   $('propertyDetailModal').addEventListener('click', event => { if (event.target === $('propertyDetailModal')) closePropertyDetail(); });
-  $('caseForm').elements.propertyId.addEventListener('change', () => { updateCasePropertyInfo(true); populateCaseRoomSelect({}); });
-  $('caseForm').elements.roomId.addEventListener('change', updateCaseRoom);
+  $('caseForm').elements.propertyId.addEventListener('change', () => { pendingCaseRoomDraft = null; updateCasePropertyInfo(true); populateCaseRoomSelect({}); });
+  $('caseForm').elements.roomId.addEventListener('change', selectCaseRoom);
   $('newPropertyFromCase').addEventListener('click', () => { closeCaseModal(); openPropertyAdmin(); });
-  $('newRoomFromCase').addEventListener('click', () => runUiAction(async () => {
+  $('newRoomFromCase').addEventListener('click', () => runUiAction(() => {
     const propertyId = $('caseForm').elements.propertyId.value;
     const property = propertyById(propertyId);
     if (!property || !can(sessionRole, 'manageRooms')) return notify('物件を選択してください。');
@@ -1709,15 +1747,12 @@ async function init() {
     if (!normalizedRoomNumber) return notify('部屋番号を入力してください。');
     const duplicate = dataAccess.rooms.getByPropertyRoom(property.id, roomNumber);
     if (duplicate) {
+      pendingCaseRoomDraft = null;
       populateCaseRoomSelect({ roomId:duplicate.id, room:duplicate.roomNumber });
       return notify(`「${duplicate.roomNumber}」は登録済みです。`);
     }
-    const now = new Date().toISOString();
-    const room = { ...createRoom(property.id), roomNumber, normalizedRoomNumber, propertyId:property.id, active:true, commonNote:'', createdAt:now, updatedAt:now };
-    if (!await dataAccess.rooms.create(room)) return notify('部屋を追加できませんでした。');
-    addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を案件登録画面から追加`);
-    await persist('部屋を追加しました。');
-    selectCreatedRoomForCase(room);
+    selectDraftRoomForCase({ roomNumber, normalizedRoomNumber, propertyId:property.id });
+    notify(`「${roomNumber}」は案件保存時に部屋マスタへ登録されます。`);
   }));
   $('duplicateCaseReview').addEventListener('click', reviewDuplicateCase);
   $('duplicateCaseProceed').addEventListener('click', () => {

@@ -48,9 +48,39 @@ test('local provider remains await-compatible and never calls HTTP', async () =>
   assert.equal(await local.snapshot.save(), true);
 });
 
+test('local modeもcase保存時だけroom draftを正式作成する', async () => {
+  const local = createApplicationStore(createLocalDataProvider());
+  await local.snapshot.load({ role:'admin' });
+  const property = local.properties.list()[0];
+  const roomNumber = 'local draft 810号室';
+  const beforeRooms = local.rooms.list().length;
+  assert.equal(local.rooms.getByPropertyRoom(property.id, roomNumber), null);
+  const item = {
+    id:'case-local-room-draft', propertyId:property.id, roomId:'', property:property.name, room:roomNumber,
+    residentName:'', residentPhone:'', note:'', status:'問い合わせ', workflowHistory:[], scheduleHistory:[]
+  };
+  await local.cases.create(item, { roomDraft:{ propertyId:property.id, roomNumber } });
+  assert.equal(local.rooms.list().length, beforeRooms + 1);
+  assert.equal(item.roomId, local.rooms.getByPropertyRoom(property.id, roomNumber).id);
+  assert.equal(local.cases.get(item.id).roomId, item.roomId);
+});
+
+test('HTTP modeはroom draftをcase APIへ渡し、作成済みroomをcacheへ反映する', async () => {
+  await store.snapshot.load({ role:'admin', user:'西山さん', userId:'nishiyama' });
+  const beforeRooms = store.rooms.list().length;
+  const item = {
+    id:'case-http-room-draft', propertyId:'property-001', roomId:'', property:'○○マンション', room:'http draft 812号室',
+    residentName:'', residentPhone:'', note:'', status:'問い合わせ', workflowHistory:[], scheduleHistory:[]
+  };
+  await store.cases.create(item, { roomDraft:{ propertyId:'property-001', roomNumber:'http draft 812号室' }, auditDetail:'room draft create' });
+  assert.ok(item.roomId);
+  assert.equal(store.rooms.list().length, beforeRooms + 1);
+  assert.equal(store.rooms.get(item.roomId).roomNumber, 'http draft 812号室');
+});
+
 test('Promise provider hydrates lists, detail histories and metadata', async () => {
   const state = await store.snapshot.load({ role:'admin', user:'西山さん', userId:'nishiyama' });
-  assert.equal(state.cases.length, 2);
+  assert.ok(state.cases.length >= 2);
   assert.equal(store.cases.get('case-001').id, 'case-001');
   assert.ok(Array.isArray(store.cases.get('case-001').workflowHistory));
   assert.ok(Array.isArray(store.cases.get('case-001').scheduleHistory));

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { requireRole } from '../auth.js';
 import { conflictError, forbiddenError, internalError, notFoundError, validationError } from '../errors.js';
 import { assertPhotoBinaryStore, createMemoryPhotoBinaryStore } from '../photo-storage/photo-binary-store.js';
@@ -19,9 +19,16 @@ const expectedVersion = body => {
 const excludedBusinessKeys = new Set(['password','passwordHash','passwordSalt','credentials','session','sessionToken','auth','authorization','databaseUrl','apiKey','serviceAccount','photos','photoMetadata','source','data','content']);
 const safeBusinessFields = body => Object.fromEntries(Object.entries(body || {}).filter(([key]) => !excludedBusinessKeys.has(key)));
 const withoutVersion = body => {
-  const { version:unusedVersion, auditDetail:unusedAuditDetail, ...changes } = safeBusinessFields(body);
+  const { version:unusedVersion, auditDetail:unusedAuditDetail, roomDraft:unusedRoomDraft, ...changes } = safeBusinessFields(body);
   return changes;
 };
+const normalizeRoomNumber = value => String(value || '')
+  .trim()
+  .replace(/[０-９]/g, character => String.fromCharCode(character.charCodeAt(0) - 0xFEE0))
+  .replace(/\s*号室\s*$/, '')
+  .replace(/(\d)[\s\u3000]+(?=\d)/g, '$1')
+  .trim();
+const draftRoomId = (propertyId, normalizedRoomNumber) => `room-case-draft-${createHash('sha256').update(`${propertyId}\0${normalizedRoomNumber}`).digest('hex').slice(0, 24)}`;
 
 export async function isCaseAssignedToUser(provider, item, user) {
   if (!item || !user) return false;
@@ -80,6 +87,38 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
   const requireMasterWriteRole = (name, user) => name === 'rooms'
     ? requireRole(user, 'admin', 'office')
     : requireRole(user, 'admin');
+  const resolveCaseRoom = async (tx, body, user, propertyId) => {
+    const draft = body?.roomDraft;
+    if (!draft) {
+      const roomId = requiredString(body, 'roomId', 'roomId');
+      const room = await tx.rooms.get(roomId);
+      if (!room) throw validationError('指定された部屋が存在しません。', { field:'roomId' });
+      if (room.propertyId !== propertyId) throw validationError('指定された部屋は選択物件に属していません。', { field:'roomId' });
+      return room;
+    }
+    requireRole(user, 'admin', 'office');
+    const draftPropertyId = String(draft.propertyId || propertyId).trim();
+    if (draftPropertyId !== propertyId) throw validationError('新規部屋は選択物件に属していません。', { field:'roomDraft.propertyId' });
+    const roomNumber = requiredString(draft, 'roomNumber', '部屋番号');
+    const normalizedRoomNumber = normalizeRoomNumber(roomNumber);
+    if (!normalizedRoomNumber) throw validationError('部屋番号は必須です。', { field:'roomDraft.roomNumber' });
+    const duplicate = (await tx.rooms.list()).find(room => room.propertyId === propertyId && normalizeRoomNumber(room.normalizedRoomNumber || room.roomNumber) === normalizedRoomNumber);
+    if (duplicate) {
+      if (duplicate.active === false) throw conflictError('同じ部屋番号の無効な部屋が登録済みです。部屋管理で有効化してください。');
+      return duplicate;
+    }
+    const room = await tx.rooms.create({
+      id:draftRoomId(propertyId, normalizedRoomNumber),
+      propertyId,
+      roomNumber,
+      normalizedRoomNumber,
+      active:true,
+      commonNote:'',
+      version:1
+    });
+    await writeAudit(tx, user, { property:body.property || '', room:roomNumber }, `案件保存時に部屋「${roomNumber}」を追加`);
+    return room;
+  };
 
   return Object.freeze({
     health() {
@@ -100,13 +139,10 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
       requireRole(user, 'admin', 'office');
       return inTransaction(async tx => {
         const propertyId = requiredString(body, 'propertyId', 'propertyId');
-        const roomId = requiredString(body, 'roomId', 'roomId');
         if (!await tx.properties.get(propertyId)) throw validationError('指定された物件が存在しません。', { field:'propertyId' });
-        const selectedRoom = await tx.rooms.get(roomId);
-        if (!selectedRoom) throw validationError('指定された部屋が存在しません。', { field:'roomId' });
-        if (selectedRoom.propertyId !== propertyId) throw validationError('指定された部屋は選択物件に属していません。', { field:'roomId' });
-        const { auditDetail:unusedAuditDetail, ...caseBody } = safeBusinessFields(body);
-        const item = await tx.cases.create({ ...caseBody, id:body.id || resourceId('case'), propertyId, roomId, property:requiredString(body, 'property', '物件名'), room:requiredString(body, 'room', '部屋番号'), status:body.status || '問い合わせ', lifecycleStatus:body.lifecycleStatus || 'active', isArchived:body.isArchived === true, residentAccessEnabled:body.residentAccessEnabled !== false, workflowHistory:Array.isArray(body.workflowHistory) ? body.workflowHistory : [], scheduleHistory:Array.isArray(body.scheduleHistory) ? body.scheduleHistory : [], version:1 });
+        const selectedRoom = await resolveCaseRoom(tx, body, user, propertyId);
+        const { auditDetail:unusedAuditDetail, roomDraft:unusedRoomDraft, ...caseBody } = safeBusinessFields(body);
+        const item = await tx.cases.create({ ...caseBody, id:body.id || resourceId('case'), propertyId, roomId:selectedRoom.id, property:requiredString(body, 'property', '物件名'), room:selectedRoom.roomNumber, status:body.status || '問い合わせ', lifecycleStatus:body.lifecycleStatus || 'active', isArchived:body.isArchived === true, residentAccessEnabled:body.residentAccessEnabled !== false, workflowHistory:Array.isArray(body.workflowHistory) ? body.workflowHistory : [], scheduleHistory:Array.isArray(body.scheduleHistory) ? body.scheduleHistory : [], version:1 });
         await writeAudit(tx, user, item, body.auditDetail || '案件を登録');
         return item;
       });
@@ -125,11 +161,9 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
           if (restoresCancellation || restoresArchive) throw forbiddenError('取消・アーカイブの解除はadminだけが実行できます。');
         }
         const nextPropertyId = body?.propertyId || current.propertyId;
-        const nextRoomId = body?.roomId || current.roomId;
         if (!await tx.properties.get(nextPropertyId)) throw validationError('指定された物件が存在しません。', { field:'propertyId' });
-        const nextRoom = await tx.rooms.get(nextRoomId);
-        if (!nextRoom || nextRoom.propertyId !== nextPropertyId) throw validationError('指定された部屋は選択物件に属していません。', { field:'roomId' });
-        const item = await tx.cases.update(id, withoutVersion(body), { expectedVersion:expectedVersion(body) });
+        const nextRoom = await resolveCaseRoom(tx, { ...body, roomId:body?.roomId || current.roomId }, user, nextPropertyId);
+        const item = await tx.cases.update(id, { ...withoutVersion(body), propertyId:nextPropertyId, roomId:nextRoom.id, room:nextRoom.roomNumber }, { expectedVersion:expectedVersion(body) });
         await writeAudit(tx, user, item, body.auditDetail || '案件を更新');
         return item;
       });

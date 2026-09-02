@@ -17,22 +17,24 @@ test('未保存新規案件で作成した部屋を選ぶとPIIと備考を空�
   assert.equal(next.note, '');
 
   const app = await read('../assets/js/app.js');
-  const flow = app.slice(app.indexOf('function selectCreatedRoomForCase'), app.indexOf('function updateEndPreviews'));
+  const flow = app.slice(app.indexOf('function selectDraftRoomForCase'), app.indexOf('function updateEndPreviews'));
   assert.match(flow, /caseDraftForCreatedRoom\(\{/);
-  assert.match(flow, /populateCaseRoomSelect\(\{ roomId:room\.id, room:room\.roomNumber \}\)/);
+  assert.match(flow, /pendingCaseRoomDraft = roomDraft/);
+  assert.match(flow, /populateCaseRoomSelect\(\{ roomId:CASE_ROOM_DRAFT_VALUE, room:roomDraft\.roomNumber \}\)/);
   assert.match(flow, /\['residentName','residentPhone','note'\]\.forEach/);
 });
 
-test('未登録room作成成功後だけPII初期化付き選択処理を呼ぶ', async () => {
+test('未登録room入力時はdraft選択だけを行いroom APIや永続保存を呼ばない', async () => {
   const app = await read('../assets/js/app.js');
   const handler = app.slice(app.indexOf("$('newRoomFromCase').addEventListener"), app.indexOf("$('duplicateCaseReview').addEventListener"));
-  assert.ok(handler.indexOf('if (!await dataAccess.rooms.create(room)) return') < handler.indexOf('selectCreatedRoomForCase(room)'));
-  assert.ok(handler.indexOf("await persist('部屋を追加しました。')") < handler.indexOf('selectCreatedRoomForCase(room)'));
+  assert.doesNotMatch(handler, /dataAccess\.rooms\.create/);
+  assert.doesNotMatch(handler, /persist\(/);
+  assert.match(handler, /selectDraftRoomForCase\(\{ roomNumber, normalizedRoomNumber, propertyId:property\.id \}\)/);
+  assert.match(handler, /案件保存時に部屋マスタへ登録されます/);
   assert.match(handler, /const propertyId = \$\('caseForm'\)\.elements\.propertyId\.value/);
-  assert.match(handler, /const room = \{ \.\.\.createRoom\(property\.id\)/);
 });
 
-test('既存案件編集で新しい部屋を作ってもPIIと備考を保持する', async () => {
+test('既存案件編集でも未登録room draftへ切り替えるとPIIと備考を空欄化する', async () => {
   const draft = {
     id:'case-1', propertyId:'property-1', roomId:'room-old',
     residentName:'既存入居者', residentPhone:'03-0000-0000', note:'既存案件の備考'
@@ -40,13 +42,32 @@ test('既存案件編集で新しい部屋を作ってもPIIと備考を保持�
   const next = caseDraftForCreatedRoom(draft, { id:'room-new', propertyId:'property-1' });
   assert.equal(next.propertyId, 'property-1');
   assert.equal(next.roomId, 'room-new');
-  assert.equal(next.residentName, draft.residentName);
-  assert.equal(next.residentPhone, draft.residentPhone);
-  assert.equal(next.note, draft.note);
+  assert.equal(next.residentName, '');
+  assert.equal(next.residentPhone, '');
+  assert.equal(next.note, '');
 
   const app = await read('../assets/js/app.js');
   assert.match(app, /form\.elements\.id\.value = c\?\.id \|\| ''/);
   assert.match(app, /const source = c \|\| \{ \.\.\.createCase\(\)/);
+});
+
+test('draftは未保存表示され、閉じる・property変更では破棄される', async () => {
+  const app = await read('../assets/js/app.js');
+  assert.match(app, /\$\{esc\(draft\.roomNumber\)\}（未保存）/);
+  assert.match(app, /function closeCaseModal\(\) \{[^}]*pendingCaseRoomDraft = null/);
+  assert.match(app, /propertyId\.addEventListener\('change', \(\) => \{ pendingCaseRoomDraft = null/);
+  assert.match(app, /dataAccess\.cases\.create\(c, \{ auditDetail:'案件を新規登録', roomDraft \}\)/);
+  assert.match(app, /dataAccess\.cases\.update\(c\.id, caseValues, \{ auditDetail:'案件情報を編集', roomDraft \}\)/);
+});
+
+test('登録済みroomの通常選択はdraftだけ破棄しPII・備考を変更しない', async () => {
+  const app = await read('../assets/js/app.js');
+  const flow = app.slice(app.indexOf('function selectCaseRoom'), app.indexOf('function updateEndPreviews'));
+  assert.match(flow, /selectedRoomId !== CASE_ROOM_DRAFT_VALUE/);
+  assert.match(flow, /pendingCaseRoomDraft = null/);
+  assert.doesNotMatch(flow, /residentName[^\n]*value\s*=/);
+  assert.doesNotMatch(flow, /residentPhone[^\n]*value\s*=/);
+  assert.doesNotMatch(flow, /note[^\n]*value\s*=/);
 });
 
 test('residentNameとresidentPhoneは空欄を許容したままtrimして保存する', async () => {

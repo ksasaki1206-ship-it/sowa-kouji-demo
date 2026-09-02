@@ -1,4 +1,4 @@
-import { PHOTO_GROUPS, createCase } from './data.js?v=20260901-22';
+import { PHOTO_GROUPS, createCase, createRoom, normalizeRoomNumber } from './data.js?v=20260901-22';
 import { repositories } from './repositories.js?v=20260901-22';
 
 const photoGroups = Object.keys(PHOTO_GROUPS);
@@ -55,6 +55,33 @@ export function createApplicationStore(provider) {
     return state;
   };
   const bound = name => Object.freeze(Object.fromEntries(Object.keys(repositories[name]).map(method => [method, (...args) => repositories[name][method](current(), ...args)])));
+  const localRoomForDraft = roomDraft => {
+    if (!roomDraft) return null;
+    const propertyId = String(roomDraft.propertyId || '').trim();
+    const roomNumber = String(roomDraft.roomNumber || '').trim();
+    const normalizedRoomNumber = normalizeRoomNumber(roomNumber);
+    if (!propertyId || !normalizedRoomNumber) throw new Error('新規部屋の入力内容を確認してください。');
+    const existing = provider.rooms.getByPropertyRoom(propertyId, roomNumber);
+    if (existing) {
+      if (existing.active === false) throw new Error('同じ部屋番号の無効な部屋が登録済みです。部屋管理で有効化してください。');
+      return { room:existing, created:false };
+    }
+    const room = { ...createRoom(propertyId), propertyId, roomNumber, normalizedRoomNumber, active:true, commonNote:'' };
+    if (!provider.rooms.create(room)) throw new Error('部屋を登録できませんでした。');
+    return { room, created:true };
+  };
+  const rollbackLocalDraftRoom = resolved => {
+    if (!resolved?.created) return;
+    const rooms = current().rooms;
+    const index = rooms.findIndex(room => room.id === resolved.room.id);
+    if (index >= 0) rooms.splice(index, 1);
+  };
+  const cacheRoomFromCase = item => {
+    if (!remote || !item?.roomId || currentRole === 'worker') return;
+    const existing = repositories.rooms.get(current(), item.roomId);
+    if (existing) return Object.assign(existing, { roomNumber:item.room, normalizedRoomNumber:normalizeRoomNumber(item.room), active:true });
+    repositories.rooms.create(current(), { id:item.roomId, propertyId:item.propertyId, roomNumber:item.room, normalizedRoomNumber:normalizeRoomNumber(item.room), active:true, version:1 });
+  };
 
   const loadCaseExtras = async item => {
     const [workflowHistory, scheduleHistory, photos] = await Promise.all([
@@ -104,12 +131,13 @@ export function createApplicationStore(provider) {
     return existing || normalized;
   };
 
-  const updateRemoteCase = async (id, changes, auditDetail = '') => {
+  const updateRemoteCase = async (id, changes, auditDetail = '', roomDraft = null) => {
     const item = repositories.cases.get(current(), id);
     if (!item) return null;
     const { version:unusedVersion, id:unusedId, createdAt:unusedCreatedAt, photos:unusedPhotos, photoMetadata:unusedMetadata, ...safeChanges } = changes || {};
-    const updated = await provider.cases.update(id, { ...safeChanges, version:Number(item.version || 1), auditDetail });
+    const updated = await provider.cases.update(id, { ...safeChanges, version:Number(item.version || 1), auditDetail, ...(roomDraft ? { roomDraft } : {}) });
     mergeCase(item, updated);
+    cacheRoomFromCase(item);
     await reloadAudit();
     return item;
   };
@@ -117,16 +145,39 @@ export function createApplicationStore(provider) {
   const cases = Object.freeze({
     ...bound('cases'),
     async create(item, options = {}) {
-      if (!remote) return provider.cases.create(item);
-      const created = await provider.cases.create({ ...item, auditDetail:options.auditDetail || '' });
+      if (!remote) {
+        const resolved = localRoomForDraft(options.roomDraft);
+        if (resolved) Object.assign(item, { propertyId:resolved.room.propertyId, roomId:resolved.room.id, room:resolved.room.roomNumber });
+        try {
+          const created = provider.cases.create(item);
+          if (!created) throw new Error('案件を登録できませんでした。');
+          return created;
+        } catch (error) {
+          rollbackLocalDraftRoom(resolved);
+          throw error;
+        }
+      }
+      const created = await provider.cases.create({ ...item, auditDetail:options.auditDetail || '', ...(options.roomDraft ? { roomDraft:options.roomDraft } : {}) });
       Object.assign(item, normalizedRemoteCase(created));
+      cacheRoomFromCase(item);
       repositories.cases.create(current(), item);
       await reloadAudit();
       return item;
     },
     async update(id, changes, options = {}) {
-      if (!remote) return provider.cases.update(id, changes);
-      return updateRemoteCase(id, changes, options.auditDetail || '');
+      if (!remote) {
+        if (!provider.cases.get(id)) return null;
+        const resolved = localRoomForDraft(options.roomDraft);
+        try {
+          const updated = provider.cases.update(id, resolved ? { ...changes, propertyId:resolved.room.propertyId, roomId:resolved.room.id, room:resolved.room.roomNumber } : changes);
+          if (!updated) throw new Error('案件を更新できませんでした。');
+          return updated;
+        } catch (error) {
+          rollbackLocalDraftRoom(resolved);
+          throw error;
+        }
+      }
+      return updateRemoteCase(id, changes, options.auditDetail || '', options.roomDraft || null);
     },
     refresh:refreshCase
   });
