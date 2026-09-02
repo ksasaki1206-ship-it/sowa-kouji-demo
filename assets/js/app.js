@@ -118,6 +118,15 @@ function populateCaseRoomSelect(source = {}) {
   updateCaseRoom();
 }
 
+function selectCreatedRoomForCase(room) {
+  const form = $('caseForm');
+  const creatingNewCase = !form.elements.id.value;
+  populateCaseRoomSelect({ roomId:room.id, room:room.roomNumber });
+  if (!creatingNewCase) return;
+  form.elements.residentName.value = '';
+  form.elements.residentPhone.value = '';
+}
+
 function updateEndPreviews() {
   const form = $('caseForm');
   $('surveyEndPreview').textContent = `終了予定：${formatPlan(form.elements.surveyAt.value, form.elements.surveyDurationMinutes.value, false)}`;
@@ -1685,7 +1694,7 @@ async function init() {
     if (!await dataAccess.rooms.create(room)) return notify('部屋を追加できませんでした。');
     addAudit(state, { property:property.name, room:roomNumber }, `部屋「${roomNumber}」を案件登録画面から追加`);
     await persist('部屋を追加しました。');
-    populateCaseRoomSelect({ roomId:room.id, room:room.roomNumber });
+    selectCreatedRoomForCase(room);
   }));
   $('duplicateCaseReview').addEventListener('click', reviewDuplicateCase);
   $('duplicateCaseProceed').addEventListener('click', () => {
