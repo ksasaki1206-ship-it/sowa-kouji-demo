@@ -36,8 +36,8 @@ test('写真追加方法はキーボード操作可能なbuttonと十分なタ�
 
 test('localとstagingは同じ更新済みFrontend資産を読み込む', () => {
   for (const entry of [index, staging, trial]) {
-    assert.match(entry, /styles\.css\?v=20260902-30/);
-    assert.match(entry, /bootstrap\.js\?v=20260902-30/);
+    assert.match(entry, /styles\.css\?v=20260902-31/);
+    assert.match(entry, /bootstrap\.js\?v=20260902-31/);
   }
 });
 

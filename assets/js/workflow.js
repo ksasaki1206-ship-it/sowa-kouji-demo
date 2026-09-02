@@ -88,6 +88,12 @@ export function casePrefillForRoom(property, room) {
   return { propertyId:String(property.id), roomId:String(room.id) };
 }
 
+export function caseDraftForCreatedRoom(draft = {}, room = {}) {
+  const next = { ...draft, roomId:room.id || '' };
+  if (draft.id) return next;
+  return { ...next, residentName:'', residentPhone:'', note:'' };
+}
+
 export function groupCasesByRoom(cases) {
   const groups = new Map();
   (Array.isArray(cases) ? cases : []).forEach(item => {

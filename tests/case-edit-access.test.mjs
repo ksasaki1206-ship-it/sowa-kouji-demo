@@ -66,8 +66,8 @@ test('local・staging・trialは同じ更新済みFrontend資産を使う', asyn
   assert.match(staging, /name="sowa-data-source" content="http"/);
   assert.match(trial, /name="sowa-data-source" content="http"/);
   for (const html of [index, staging, trial]) {
-    assert.match(html, /assets\/css\/styles\.css\?v=20260902-30/);
-    assert.match(html, /assets\/js\/bootstrap\.js\?v=20260902-30/);
+    assert.match(html, /assets\/css\/styles\.css\?v=20260902-31/);
+    assert.match(html, /assets\/js\/bootstrap\.js\?v=20260902-31/);
   }
-  assert.match(bootstrap, /\.\/app\.js\?v=20260902-30/);
+  assert.match(bootstrap, /\.\/app\.js\?v=20260902-31/);
 });

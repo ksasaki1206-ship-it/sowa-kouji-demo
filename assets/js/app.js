@@ -4,7 +4,7 @@ import { createApplicationStore } from './application-store.js?v=20260902-25';
 import { createRequestGate, messageForDataError, runWithPending } from './async-ui.js?v=20260901-22';
 import { addAudit as appendLocalAudit, auditChanges as appendLocalAuditChanges } from './audit.js?v=20260901-22';
 import { USERS, USER_DEFINITIONS, ROLE_DEFINITIONS, getSession, authenticate, logout as clearSession, ensureCredentials, changeOwnPassword, resetUserPassword, resetAllPasswords, can } from './auth.js?v=20260901-22';
-import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, casePrefillForRoom, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260902-28';
+import { WORKFLOW_STEPS, getNextAction, getCaseAlerts, getAllAlerts, getDashboardMetrics, getStaffEvents, matchesCasePreset, matchesPastCase, recordWorkflowStep, workerOwnsCase, findScheduleConflicts, findDuplicateCases, selectableRooms, casePrefillForRoom, caseDraftForCreatedRoom, groupCasesByRoom, formatScheduleRange, responseForCase as workflowResponseForCase } from './workflow.js?v=20260902-31';
 import { SCHEDULE_TYPES, SCHEDULE_REASON_CATEGORIES, CANCEL_REASON_CATEGORIES, isCancelledCase, isArchivedCase, isOperationalCase } from './lifecycle.js?v=20260901-22';
 import { ROUTE_TYPES, parseAppRoute, buildCaseUrl, buildResidentUrl, clearAppRoute, evaluateCaseRoute } from './routing.js?v=20260901-22';
 import { generateResidentAccessToken, residentAccessStatus } from './resident-access.js?v=20260901-22';
@@ -120,11 +120,16 @@ function populateCaseRoomSelect(source = {}) {
 
 function selectCreatedRoomForCase(room) {
   const form = $('caseForm');
-  const creatingNewCase = !form.elements.id.value;
+  const draft = caseDraftForCreatedRoom({
+    id:form.elements.id.value,
+    propertyId:form.elements.propertyId.value,
+    roomId:form.elements.roomId.value,
+    residentName:form.elements.residentName.value,
+    residentPhone:form.elements.residentPhone.value,
+    note:form.elements.note.value
+  }, room);
   populateCaseRoomSelect({ roomId:room.id, room:room.roomNumber });
-  if (!creatingNewCase) return;
-  form.elements.residentName.value = '';
-  form.elements.residentPhone.value = '';
+  ['residentName','residentPhone','note'].forEach(key => { form.elements[key].value = draft[key]; });
 }
 
 function updateEndPreviews() {
@@ -664,6 +669,8 @@ function openCaseModal(c, prefill = {}) {
   const form = $('caseForm');
   form.reset();
   form.elements.id.value = c?.id || '';
+  form.elements.residentName.autocomplete = c ? 'name' : 'off';
+  form.elements.residentPhone.autocomplete = c ? 'tel' : 'off';
   const source = c || { ...createCase(), propertyId:prefill.propertyId || '', roomId:prefill.roomId || '' };
   editingCaseSnapshot = c ? clone(c) : null;
   ['property','room','residentName','residentPhone','address','owner','status','surveyAt','surveyDurationMinutes','estimateAmount','materialOrderedAt','materialDeliveryAt','materialReceivedAt','supplier','materialNote','workAt','workDurationMinutes','nextActionOverride','note'].forEach(key => form.elements[key].value = source[key] ?? '');
@@ -1549,16 +1556,21 @@ function openPropertyDetail(id) {
   const canCreateCase = can(sessionRole, 'create');
   $('propertyDetailTitle').textContent = property.name;
   const roomRows = rooms.map(room => {
-    const createAction = canCreateCase ? `<button class="btn primary create-room-case" type="button" data-property-id="${esc(property.id)}" data-room-id="${esc(room.id)}" aria-label="${esc(room.roomNumber)}の案件を作成" ${room.active ? '' : 'disabled aria-disabled="true" title="案件を作成するには部屋を有効化してください"'}>案件を作成</button>` : '';
-    const editActions = editable ? `<button class="btn edit-room" type="button" data-id="${esc(room.id)}">編集</button><button class="btn toggle-room ${room.active ? 'danger' : ''}" type="button" data-id="${esc(room.id)}">${room.active ? '無効化' : '有効化'}</button>` : '';
-    const actions = createAction || editActions ? `<div class="actions">${createAction}${editActions}</div>` : '';
-    return `<article class="room-master-row ${room.active ? '' : 'inactive'}"><div><b>${esc(room.roomNumber)}</b>${room.active ? '' : '<span class="badge inactive-badge">無効</span>'}<small>${esc(room.commonNote || '共通備考なし')} ／ 案件 ${cases.filter(item => item.roomId === room.id).length}件</small></div>${actions}</article>`;
+    const roomCases = cases.filter(item => item.roomId === room.id);
+    const caseState = roomCases.length
+      ? `<span class="badge room-case-count has-cases">案件 ${roomCases.length}件</span>`
+      : '<span class="badge room-case-count no-cases">案件なし</span>';
+    const viewAction = roomCases.length ? `<button class="btn view-room-cases" type="button" data-room-id="${esc(room.id)}" aria-label="${esc(room.roomNumber)}の案件を見る">案件を見る</button>` : '';
+    const createAction = canCreateCase ? `<button class="btn primary create-room-case" type="button" data-property-id="${esc(property.id)}" data-room-id="${esc(room.id)}" aria-label="${esc(room.roomNumber)}の新規案件を作成" ${room.active ? '' : 'disabled aria-disabled="true" title="案件を作成するには部屋を有効化してください"'}>新規案件を作成</button>` : '';
+    const editActions = editable ? `<button class="btn edit-room" type="button" data-id="${esc(room.id)}" aria-label="${esc(room.roomNumber)}を編集">編集</button><button class="btn toggle-room ${room.active ? 'danger' : ''}" type="button" data-id="${esc(room.id)}" aria-label="${esc(room.roomNumber)}を${room.active ? '無効化' : '有効化'}">${room.active ? '無効化' : '有効化'}</button>` : '';
+    const actions = viewAction || createAction || editActions ? `<div class="actions room-case-actions ${roomCases.length ? 'has-cases' : 'no-cases'}">${viewAction}${createAction}${editActions}</div>` : '';
+    return `<article class="room-master-row ${room.active ? '' : 'inactive'}"><div><b>${esc(room.roomNumber)}${room.active ? '' : '<span class="badge inactive-badge">無効</span>'}</b>${caseState}<small>${esc(room.commonNote || '共通備考なし')}</small></div>${actions}</article>`;
   }).join('') || '<div class="empty">部屋が登録されていません。</div>';
   const roomForm = editable ? `<form id="roomForm" class="form room-form"><input type="hidden" name="id"><div class="two"><label><span>部屋番号</span><input class="input" name="roomNumber" required placeholder="例：101号室"></label><label><span>部屋共通備考</span><input class="input" name="commonNote" placeholder="鍵・入室時の注意など"></label></div><label class="confirm-check"><input type="checkbox" name="active" checked><span>新規案件で選択できる有効な部屋</span></label><label class="confirm-check room-case-followup"><input type="checkbox" name="createCaseAfterSave" checked><span>登録後、この部屋の案件を続けて作成する</span></label><div class="actions"><button class="btn primary" type="submit">部屋を保存</button><button id="clearRoomForm" class="btn" type="button">新規入力に戻す</button></div><div id="roomFormError" class="form-error hidden" role="alert"></div></form>` : '<p class="muted">部屋情報は管理者が編集できます。</p>';
   const caseRows = caseGroups.map(group => {
     const room = roomById(group.roomId);
     const displayRoom = room?.roomNumber || group.cases[0]?.room || '部屋未登録';
-    return `<div class="property-room"><b>${esc(displayRoom)}</b>${group.cases.map(item => `<button class="property-case-link" type="button" data-id="${esc(item.id)}"><span>${esc(item.status)}</span><small>${esc(item.residentName || '入居者未登録')} ／ 次：${esc(nextAction(item))}</small><b>›</b></button>`).join('')}</div>`;
+    return `<div class="property-room" data-room-id="${esc(group.roomId)}" tabindex="-1"><b>${esc(displayRoom)}</b>${group.cases.map(item => `<button class="property-case-link" type="button" data-id="${esc(item.id)}"><span>${esc(item.status)}</span><small>${esc(item.residentName || '入居者未登録')} ／ 次：${esc(nextAction(item))}</small><b>›</b></button>`).join('')}</div>`;
   }).join('') || '<div class="empty">この物件の案件はありません。</div>';
   $('propertyDetailContent').innerHTML = `<section class="property-detail-grid">${propertyReferenceHtml(property)}</section><section class="property-rooms"><div class="section-head"><h2>部屋マスタ</h2><span class="muted">${rooms.length}室</span></div>${roomForm}<div class="room-master-list">${roomRows}</div></section><section class="property-cases"><h2>この物件の案件</h2>${caseRows}</section>`;
   const roomEditor = $('roomForm');
@@ -1616,6 +1628,17 @@ function openPropertyDetail(id) {
     roomEditor.elements.roomNumber.focus();
   }));
   $('propertyDetailContent').querySelectorAll('.create-room-case').forEach(button => button.addEventListener('click', () => openCaseForRoom(button.dataset.propertyId, button.dataset.roomId)));
+  $('propertyDetailContent').querySelectorAll('.view-room-cases').forEach(button => button.addEventListener('click', () => {
+    const roomCases = cases.filter(item => item.roomId === button.dataset.roomId);
+    if (roomCases.length === 1) {
+      $('propertyDetailModal').classList.add('hidden');
+      closePropertyAdmin();
+      return openDetail(roomCases[0].id);
+    }
+    const target = [...$('propertyDetailContent').querySelectorAll('.property-room')].find(item => item.dataset.roomId === button.dataset.roomId);
+    target?.scrollIntoView({ block:'start', behavior:'smooth' });
+    target?.focus({ preventScroll:true });
+  }));
   $('propertyDetailContent').querySelectorAll('.toggle-room').forEach(button => button.addEventListener('click', () => runUiAction(async () => {
     if (!can(sessionRole, 'manageRooms')) return;
     const room = roomById(button.dataset.id);

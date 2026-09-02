@@ -1,18 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { caseDraftForCreatedRoom } from '../assets/js/workflow.js';
 
 const read = path => readFile(new URL(path, import.meta.url), 'utf8');
 
-test('新規案件で作成した部屋を選ぶとresidentNameとresidentPhoneだけを空欄化する', async () => {
+test('未保存新規案件で作成した部屋を選ぶとPIIと備考を空欄化する', async () => {
+  const next = caseDraftForCreatedRoom({
+    id:'', propertyId:'property-1', roomId:'room-old',
+    residentName:'前の入居者', residentPhone:'090-0000-0000', note:'鍵情報を含む前部屋の備考'
+  }, { id:'room-new', propertyId:'property-1' });
+  assert.equal(next.propertyId, 'property-1');
+  assert.equal(next.roomId, 'room-new');
+  assert.equal(next.residentName, '');
+  assert.equal(next.residentPhone, '');
+  assert.equal(next.note, '');
+
   const app = await read('../assets/js/app.js');
   const flow = app.slice(app.indexOf('function selectCreatedRoomForCase'), app.indexOf('function updateEndPreviews'));
-  assert.match(flow, /const creatingNewCase = !form\.elements\.id\.value/);
+  assert.match(flow, /caseDraftForCreatedRoom\(\{/);
   assert.match(flow, /populateCaseRoomSelect\(\{ roomId:room\.id, room:room\.roomNumber \}\)/);
-  assert.match(flow, /if \(!creatingNewCase\) return/);
-  assert.match(flow, /form\.elements\.residentName\.value = ''/);
-  assert.match(flow, /form\.elements\.residentPhone\.value = ''/);
-  assert.doesNotMatch(flow, /propertyId\.value\s*=/);
+  assert.match(flow, /\['residentName','residentPhone','note'\]\.forEach/);
 });
 
 test('未登録room作成成功後だけPII初期化付き選択処理を呼ぶ', async () => {
@@ -24,12 +32,20 @@ test('未登録room作成成功後だけPII初期化付き選択処理を呼ぶ'
   assert.match(handler, /const room = \{ \.\.\.createRoom\(property\.id\)/);
 });
 
-test('既存案件編集では案件idがあるためresident情報を保持する', async () => {
+test('既存案件編集で新しい部屋を作ってもPIIと備考を保持する', async () => {
+  const draft = {
+    id:'case-1', propertyId:'property-1', roomId:'room-old',
+    residentName:'既存入居者', residentPhone:'03-0000-0000', note:'既存案件の備考'
+  };
+  const next = caseDraftForCreatedRoom(draft, { id:'room-new', propertyId:'property-1' });
+  assert.equal(next.propertyId, 'property-1');
+  assert.equal(next.roomId, 'room-new');
+  assert.equal(next.residentName, draft.residentName);
+  assert.equal(next.residentPhone, draft.residentPhone);
+  assert.equal(next.note, draft.note);
+
   const app = await read('../assets/js/app.js');
   assert.match(app, /form\.elements\.id\.value = c\?\.id \|\| ''/);
-  const flow = app.slice(app.indexOf('function selectCreatedRoomForCase'), app.indexOf('function updateEndPreviews'));
-  assert.ok(flow.indexOf('if (!creatingNewCase) return') < flow.indexOf("form.elements.residentName.value = ''"));
-  assert.ok(flow.indexOf('if (!creatingNewCase) return') < flow.indexOf("form.elements.residentPhone.value = ''"));
   assert.match(app, /const source = c \|\| \{ \.\.\.createCase\(\)/);
 });
 
@@ -41,6 +57,8 @@ test('residentNameとresidentPhoneは空欄を許容したままtrimして保存
   assert.doesNotMatch(index, /name="residentPhone"[^>]*required/);
   assert.match(app, /values\.residentName = values\.residentName\.trim\(\)/);
   assert.match(app, /values\.residentPhone = values\.residentPhone\.trim\(\)/);
+  assert.match(app, /residentName\.autocomplete = c \? 'name' : 'off'/);
+  assert.match(app, /residentPhone\.autocomplete = c \? 'tel' : 'off'/);
 });
 
 test('browser promptは今回維持し、room-to-caseと編集導線を変更しない', async () => {

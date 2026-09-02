@@ -48,22 +48,37 @@ test('部屋保存失敗時は案件フォームを開かず、案件はフォ�
   assert.match(saveFlow, /await dataAccess\.cases\.create\(c/);
 });
 
-test('登録済み部屋の案件作成ボタンはbutton・自動選択data・aria-labelを持つ', async () => {
+test('登録済み部屋の新規案件作成ボタンはbutton・自動選択data・aria-labelを持つ', async () => {
   const app = await read('../assets/js/app.js');
   assert.match(app, /<button class="btn primary create-room-case" type="button"/);
   assert.match(app, /data-property-id="\$\{esc\(property\.id\)\}"/);
   assert.match(app, /data-room-id="\$\{esc\(room\.id\)\}"/);
-  assert.match(app, /aria-label="\$\{esc\(room\.roomNumber\)\}の案件を作成"/);
+  assert.match(app, /aria-label="\$\{esc\(room\.roomNumber\)\}の新規案件を作成"/);
+  assert.match(app, />新規案件を作成<\/button>/);
   assert.match(app, /openCaseForRoom\(button\.dataset\.propertyId, button\.dataset\.roomId\)/);
   assert.match(app, /const source = c \|\| \{ \.\.\.createCase\(\), propertyId:prefill\.propertyId \|\| '', roomId:prefill\.roomId \|\| '' \}/);
+});
+
+test('部屋一覧は案件なし・件数・案件を見る導線を区別する', async () => {
+  const app = await read('../assets/js/app.js');
+  assert.match(app, /roomCases\.length[\s\S]*?案件 \$\{roomCases\.length\}件[\s\S]*?案件なし/);
+  assert.match(app, /class="btn view-room-cases" type="button"/);
+  assert.match(app, /aria-label="\$\{esc\(room\.roomNumber\)\}の案件を見る"/);
+  assert.match(app, /aria-label="\$\{esc\(room\.roomNumber\)\}を編集"/);
+  assert.match(app, /aria-label="\$\{esc\(room\.roomNumber\)\}を\$\{room\.active \? '無効化' : '有効化'\}"/);
+  assert.match(app, /if \(roomCases\.length === 1\)[\s\S]*?openDetail\(roomCases\[0\]\.id\)/);
+  assert.match(app, /target\?\.scrollIntoView\(\{ block:'start', behavior:'smooth' \}\)/);
+  assert.match(app, /target\?\.focus\(\{ preventScroll:true \}\)/);
+  assert.match(app, /data-room-id="\$\{esc\(group\.roomId\)\}" tabindex="-1"/);
 });
 
 test('390px向け操作は2段配置・44pxタップ領域・横幅抑制を維持する', async () => {
   const css = await read('../assets/css/styles.css');
   assert.match(css, /\.btn\{[^}]*min-height:44px/);
   assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.room-master-row \.actions\{width:100%;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}/);
-  assert.match(css, /\.room-master-row \.create-room-case\{grid-column:1\/-1\}/);
+  assert.match(css, /\.room-master-row \.room-case-actions\.no-cases \.create-room-case\{grid-column:1\/-1\}/);
   assert.match(css, /\.room-master-row \.actions \.btn\{min-width:0\}/);
+  assert.match(css, /\.room-master-row \.actions \.btn\{width:100%;padding:0 8px\}/);
 });
 
 test('local・staging・trialは同じ修正済みFrontend資産を使う', async () => {
@@ -76,8 +91,8 @@ test('local・staging・trialは同じ修正済みFrontend資産を使う', asyn
   assert.match(staging, /name="sowa-api-auth-mode" content="identity"/);
   assert.match(trial, /name="sowa-api-auth-mode" content="identity"/);
   for (const html of [index, staging, trial]) {
-    assert.match(html, /assets\/css\/styles\.css\?v=20260902-30/);
-    assert.match(html, /assets\/js\/bootstrap\.js\?v=20260902-30/);
+    assert.match(html, /assets\/css\/styles\.css\?v=20260902-31/);
+    assert.match(html, /assets\/js\/bootstrap\.js\?v=20260902-31/);
   }
-  assert.match(bootstrap, /\.\/app\.js\?v=20260902-30/);
+  assert.match(bootstrap, /\.\/app\.js\?v=20260902-31/);
 });
