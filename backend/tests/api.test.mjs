@@ -36,6 +36,12 @@ test('health endpoint', async () => {
   assert.deepEqual(payload.data, { ok:true, service:'sowa-kouji-api', version:'v1', provider:'memory', persistent:false });
 });
 
+test('memory provider readinessはDB queryなしで200を返す', async () => {
+  const { response, payload } = await request('/api/v1/ready');
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.data, { ok:true, service:'sowa-kouji-api', version:'v1', provider:'memory', persistent:false });
+});
+
 test('case list and detail', async () => {
   const list = await request('/api/v1/cases', { user:'nishiyama' });
   assert.equal(list.response.status, 200);

@@ -47,7 +47,7 @@ function caseSummary(item) {
   return item;
 }
 
-export function createApiService(provider, { photoBinaryStore = createMemoryPhotoBinaryStore(), photoMaxBytes = DEFAULT_PHOTO_MAX_BYTES, photoReadUrlTtlMs = 10 * 60 * 1000 } = {}) {
+export function createApiService(provider, { photoBinaryStore = createMemoryPhotoBinaryStore(), photoMaxBytes = DEFAULT_PHOTO_MAX_BYTES, photoReadUrlTtlMs = 10 * 60 * 1000, readinessTimeoutMs = 2500, logger = console } = {}) {
   const binaryStore = assertPhotoBinaryStore(photoBinaryStore);
   const inTransaction = work => typeof provider.withTransaction === 'function' ? provider.withTransaction(work) : work(provider);
   const writeAudit = (targetProvider, user, item, detail) => targetProvider.audit.create({
@@ -123,6 +123,18 @@ export function createApiService(provider, { photoBinaryStore = createMemoryPhot
   return Object.freeze({
     health() {
       return { ok:true, service:'sowa-kouji-api', version:'v1', provider:provider.kind, persistent:provider.persistent === true };
+    },
+    async readiness() {
+      const base = { service:'sowa-kouji-api', version:'v1', provider:provider.kind, persistent:provider.persistent === true };
+      if (provider.kind !== 'postgres') return { ok:true, ...base };
+      try {
+        if (typeof provider.checkReadiness !== 'function') throw Object.assign(new Error('PostgreSQL readiness check is unavailable.'), { code:'READINESS_UNAVAILABLE' });
+        await provider.checkReadiness({ timeoutMs:readinessTimeoutMs });
+        return { ok:true, ...base, db:{ connected:true } };
+      } catch (error) {
+        logger.error?.('Database readiness check failed.', { name:String(error?.name || 'Error'), code:String(error?.code || 'UNKNOWN') });
+        return { ok:false, ...base, db:{ connected:false } };
+      }
     },
     async listCases(user) {
       requireRole(user, 'admin', 'office', 'worker');

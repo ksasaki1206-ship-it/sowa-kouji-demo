@@ -12,9 +12,24 @@ paths:
   /health:
     get:
       security: []
-      summary: 稼働状態
+      summary: Backend processのliveness
       responses:
         '200': { $ref: '#/components/responses/Success' }
+  /ready:
+    get:
+      security: []
+      summary: DB接続を含む業務利用可能状態
+      responses:
+        '200':
+          description: 利用可能
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessResponse' }
+        '503':
+          description: PostgreSQLへ接続できず利用不可
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessResponse' }
   /auth/config:
     get:
       security: []
@@ -367,6 +382,27 @@ components:
               version: { type: integer, minimum: 1 }
             additionalProperties: true
   schemas:
+    ReadinessResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [ok, service, version, provider, persistent]
+          properties:
+            ok: { type: boolean }
+            service: { type: string, const: sowa-kouji-api }
+            version: { type: string, const: v1 }
+            provider: { type: string, enum: [memory, postgres] }
+            persistent: { type: boolean }
+            db:
+              type: object
+              additionalProperties: false
+              required: [connected]
+              properties:
+                connected: { type: boolean }
     AuthClientConfig:
       type: object
       additionalProperties: false

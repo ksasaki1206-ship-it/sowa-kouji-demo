@@ -44,6 +44,7 @@ export function createApp({ service, authProvider, authService = null, allowedOr
   };
   const routes = [
     route('GET', /^\/api\/v1\/health$/, ({ service }) => service.health(), { public:true }),
+    route('GET', /^\/api\/v1\/ready$/, ({ service }) => service.readiness(), { public:true, status:data => data.ok ? 200 : 503 }),
     route('GET', /^\/api\/v1\/auth\/config$/, () => formalAuth().getPublicConfig(), { public:true }),
     route('POST', /^\/api\/v1\/auth\/login$/, ({ body }) => formalAuth().login(body), { public:true, body:true }),
     route('GET', /^\/api\/v1\/auth\/me$/, ({ user }) => formalAuth().me(user)),
@@ -91,7 +92,8 @@ export function createApp({ service, authProvider, authService = null, allowedOr
       const user = selected.public ? null : await authenticateRequest(request, authProvider);
       const body = selected.body ? await readJson(request, selected.bodyLimit) : undefined;
       const data = await selected.action({ service, user, params, body, request });
-      sendData(response, data, selected.created ? 201 : 200);
+      const status = typeof selected.status === 'function' ? selected.status(data) : selected.created ? 201 : 200;
+      sendData(response, data, status);
     } catch (error) {
       const apiError = error instanceof ApiError ? error : new ApiError(500, ERROR_CODES.INTERNAL_ERROR, 'サーバー内部でエラーが発生しました。');
       if (!(error instanceof ApiError)) console.error(error);

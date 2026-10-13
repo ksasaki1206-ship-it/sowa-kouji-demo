@@ -194,6 +194,24 @@ function createProvider(executor, { pool, transactional = false } = {}) {
   provider = {
     kind:'postgres',
     persistent:true,
+    async checkReadiness({ timeoutMs = 2500 } = {}) {
+      const effectiveTimeoutMs = Math.max(1, Number(timeoutMs) || 2500);
+      let timeout;
+      const query = Promise.resolve().then(() => executor.query({ text:'SELECT 1', query_timeout:effectiveTimeoutMs }));
+      const timedOut = new Promise((unusedResolve, reject) => {
+        timeout = setTimeout(() => {
+          const error = new Error('Database readiness check timed out.');
+          error.code = 'READINESS_TIMEOUT';
+          reject(error);
+        }, effectiveTimeoutMs);
+        timeout.unref?.();
+      });
+      try {
+        await Promise.race([query, timedOut]);
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
     cases:new PostgresCaseStore(),
     properties:new PostgresStore('properties'),
     rooms:new PostgresStore('rooms'),
